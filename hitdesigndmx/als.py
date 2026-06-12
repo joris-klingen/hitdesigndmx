@@ -170,6 +170,10 @@ def add_note_track(
 
     The clone keeps clip names/timing/loop/time-signature; we only swap each
     populated clip's envelopes for notes and strip the instrument devices.
+
+    Any existing MidiTrack already named ``target_name`` is replaced, so
+    re-running the converter on a set is idempotent instead of accumulating
+    output tracks.
     """
     alloc, commit = _id_allocator(root)
 
@@ -202,6 +206,17 @@ def add_note_track(
             written += 1
 
     _reassign_ids(new_track, alloc)
-    root.find("LiveSet/Tracks").append(new_track)
+
+    tracks_el = root.find("LiveSet/Tracks")
+    for t in list(tracks_el):
+        if t.tag == "MidiTrack" and (track_name(t) or "").strip() == target_name:
+            tracks_el.remove(t)
+    # Live requires regular tracks to precede the ReturnTracks; a track
+    # appended after them fails to load ("more send knobs than returns").
+    children = list(tracks_el)
+    first_return = next(
+        (i for i, t in enumerate(children) if t.tag == "ReturnTrack"), len(children)
+    )
+    tracks_el.insert(first_return, new_track)
     commit()
     return written

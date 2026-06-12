@@ -32,10 +32,11 @@ Remaining work to trust the output, in priority order:
 1. **Color matching** — `vocab/hitnote_v1.py::pick_color_index` is a
    placeholder returning red always. Implement nearest-neighbour over
    `PRIMARY_PALETTE` (swap point is isolated; nothing else changes).
-2. **Golden tests** — `tests/` is empty. Convert
-   `fixtures/hitmix_set_dmx_input Project/hitmix_set_dmx_input.als` and
-   assert stable counts + representative clips (dark clip → blackout note 0,
-   strobe → note 48, pan-left → bar selectors 5+6).
+2. **Golden tests** — `tests/test_convert.py` covers fixture totals
+   (519 clips / 8521 notes), track-before-returns ordering, sends==returns,
+   and idempotent re-runs. Still missing: per-clip note assertions (dark
+   clip → blackout note 0, strobe → note 48, pan-left → bar selectors 5+6).
+   Run with `uv run --with pytest --no-project -m pytest tests/ -q`.
 3. **Mapping-drift test** — parse `../hitnotedmx/mappings/v1.tsv` (skip test
    if sibling repo absent) and assert vocab constants line up.
 4. **Velocity semantics** — encoder maps brightness → vel 64–127 for palette
