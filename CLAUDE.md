@@ -24,10 +24,16 @@ CC-style channel VST).
   (not importable; see its README). `lightmidi_midi_to_dmx.py` documents the
   old pre-freeze note vocabulary for a future `sources/old_notes.py` decoder.
 
-## State (2026-06-12)
+## State (2026-06-13)
 
-Converter runs end-to-end on the fixture: 519/519 clips, ~8.5k notes.
-Remaining work to trust the output, in priority order:
+Converter runs end-to-end (519/519 clips, ~8.5k notes) and the output loads
+in Live (track-ordering corruption fixed, see tests). **First real listen
+(2026-06-13): translation quality is poor** — converted clips don't yet
+resemble the legacy look. Expected culprits: the all-red color placeholder
+(item 1), the simplified segment interpretation in `sources/legacy_macro.py`
+vs the original heuristics (`reference/lightgen_legacy_convert.py`), and
+unverified velocity semantics (item 4). Improving fidelity is the next focus,
+in priority order:
 
 1. **Color matching** — `vocab/hitnote_v1.py::pick_color_index` is a
    placeholder returning red always. Implement nearest-neighbour over
