@@ -1,0 +1,210 @@
+"""Source decoder: the hand-programmed legacy "RGB" set (clip automation).
+
+The legacy format is an Instrument-Rack-driven MIDI track: each clip automates
+the rack's Macro Controls, and the rack is mapped (opaquely, inside Live) to a
+DMX plugin. So a clip is really per-macro automation. The macros are named by
+the user:
+
+    BAR Switch        → continuous L↔R pan across the bars
+    VOX SPOT white    → singer spots, warm-white
+    Red / Green / Blue→ bar pixel colour level
+    Strobe            → strobe
+    barmode def 0 !   → red chase overlay (when raised)
+    mode speed        → effect speed
+
+This decoder reuses the proven parsing approach from the original
+``hitmixdmx/lightgen/legacy_convert.py`` (macro reading, envelope sampling,
+segment boundaries) but lowers to the neutral IR instead of DMXIS automation.
+"""
+
+from __future__ import annotations
+
+import copy
+import xml.etree.ElementTree as ET
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from .. import als
+from ..semantic import ClipIR, LightSegment
+
+# MacroDisplayNames value → role
+MACRO_ROLES = {
+    "BAR Switch": "bar_pan",
+    "VOX SPOT white": "vox",
+    "Red": "r",
+    "Green": "g",
+    "Blue": "b",
+    "Strobe": "strobe",
+    "barmode def 0 !": "barmode",
+    "mode speed": "barspeed",
+}
+OPTIONAL_ROLES = {"barspeed"}  # absent in older racks → defaults to manual knob
+REQUIRED_ROLES = set(MACRO_ROLES.values()) - OPTIONAL_ROLES
+
+LIVE_PREROLL_TIME = -63072000.0  # sentinel Live writes for "value at clip start"
+MACRO_FULL_SCALE = 127.0
+
+# Thresholds carried over from the original converter so behaviour matches.
+BARMODE_THRESHOLD = 0.05  # barmode above this → red chase replaces the wash
+COLOR_ON = 0.02           # brightness above this → bars are considered lit
+SPOT_ON = 0.02            # vox above this → singer spots on
+PAN_LEFT = 0.35           # pan below → left bars only
+PAN_RIGHT = 0.65          # pan above → right bars only
+
+
+@dataclass
+class _Env:
+    """Sorted (time, value) automation for one macro, normalised to 0..1."""
+
+    points: list[tuple[float, float]] = field(default_factory=list)
+
+    def sample(self, t: float) -> float:
+        if not self.points:
+            return 0.0
+        chosen = self.points[0][1]
+        for pt, pv in self.points:
+            if pt <= t + 1e-9:
+                chosen = pv
+            else:
+                break
+        return chosen
+
+
+def _read_macros(rack: ET.Element) -> tuple[dict[int, str], dict[str, float]]:
+    """({AutomationTarget Id → role}, {role → manual knob value 0..1})."""
+    roles: dict[int, str] = {}
+    defaults: dict[str, float] = {}
+    for idx in range(16):
+        name_el = rack.find(f"MacroDisplayNames.{idx}")
+        macro_el = rack.find(f"MacroControls.{idx}")
+        if name_el is None or macro_el is None:
+            continue
+        role = MACRO_ROLES.get(name_el.get("Value", ""))
+        if role is None:
+            continue
+        at = macro_el.find("AutomationTarget")
+        if at is None:
+            continue
+        roles[int(at.get("Id"))] = role
+        manual = macro_el.find("Manual")
+        if manual is not None:
+            defaults[role] = _clamp01(float(manual.get("Value")) / MACRO_FULL_SCALE)
+    return roles, defaults
+
+
+def _parse_envelopes(clip: ET.Element, roles: dict[int, str]) -> dict[str, _Env]:
+    out: dict[str, _Env] = {}
+    for env in clip.findall(".//Envelopes/Envelopes/ClipEnvelope"):
+        pid_el = env.find("EnvelopeTarget/PointeeId")
+        if pid_el is None:
+            continue
+        role = roles.get(int(pid_el.get("Value")))
+        if role is None:
+            continue
+        points: list[tuple[float, float]] = []
+        for fe in env.findall("Automation/Events/FloatEvent"):
+            t = float(fe.get("Time"))
+            v = _clamp01(float(fe.get("Value")) / MACRO_FULL_SCALE)
+            if t <= LIVE_PREROLL_TIME + 1:  # preroll sentinel → clip start
+                t = 0.0
+            points.append((t, v))
+        points.sort(key=lambda p: p[0])
+        out[role] = _Env(points=points)
+    return out
+
+
+def _boundaries(macros: dict[str, _Env], length: float) -> list[float]:
+    times = {0.0, length}
+    for env in macros.values():
+        for pt, _ in env.points:
+            if 0.0 <= pt <= length:
+                times.add(pt)
+    return sorted(times)
+
+
+def _pan_to_bars(pan: float) -> frozenset[int]:
+    if pan < PAN_LEFT:
+        return frozenset({1, 2})
+    if pan > PAN_RIGHT:
+        return frozenset({3, 4})
+    return frozenset()  # centred → all bars
+
+
+def _interpret(name: str, length: float, macros: dict[str, _Env]) -> list[LightSegment]:
+    segs: list[LightSegment] = []
+    for t0, t1 in zip(_boundaries(macros, length), _boundaries(macros, length)[1:]):
+        if t1 <= t0:
+            continue
+        r = macros["r"].sample(t0)
+        g = macros["g"].sample(t0)
+        b = macros["b"].sample(t0)
+        pan = macros["bar_pan"].sample(t0)
+        vox = macros["vox"].sample(t0)
+        strobe = macros["strobe"].sample(t0)
+        barmode = macros["barmode"].sample(t0)
+        barspeed = macros["barspeed"].sample(t0)
+
+        seg = LightSegment(
+            t0=t0,
+            t1=t1,
+            bars=_pan_to_bars(pan),
+            strobe=strobe if strobe > 0.0 else 0.0,
+            spots_warm=vox > SPOT_ON,
+        )
+        if barmode > BARMODE_THRESHOLD:
+            seg.chase = True
+            # speed knob drives the chase if present, else fall back to barmode.
+            seg.chase_intensity = barspeed if barspeed > 0.0 else barmode
+        elif max(r, g, b) >= COLOR_ON:
+            seg.color = (r, g, b)
+        segs.append(seg)
+    return segs
+
+
+def decode(root: ET.Element, *, track: ET.Element | None = None) -> list[ClipIR]:
+    """Lower every populated clip on the legacy track into a ``ClipIR``."""
+    src = track if track is not None else als.find_legacy_track(root)
+    rack = src.find(".//InstrumentGroupDevice")
+    if rack is None:
+        raise RuntimeError("selected track has no Instrument Rack — not a legacy set")
+    roles, defaults = _read_macros(rack)
+    missing = REQUIRED_ROLES - set(roles.values())
+    if missing:
+        raise RuntimeError(
+            f"legacy rack is missing macro(s) for {sorted(missing)}; "
+            f"expected named macros {sorted(MACRO_ROLES)}"
+        )
+
+    out: list[ClipIR] = []
+    for slot_idx, slot in enumerate(als.clip_slots(src)):
+        clip = als.slot_clip(slot)
+        if clip is None:
+            continue
+        name = clip.find("Name").get("Value")
+        length = float(clip.find("Loop/LoopEnd").get("Value"))
+        macros = _parse_envelopes(clip, roles)
+        for role in MACRO_ROLES.values():
+            macros.setdefault(role, _Env(points=[(0.0, defaults.get(role, 0.0))]))
+        out.append(
+            ClipIR(
+                name=name,
+                slot=slot_idx,
+                length_beats=length,
+                segments=_interpret(name, length, macros),
+                source_clip=copy.deepcopy(clip),
+            )
+        )
+    return out
+
+
+def detect(root: ET.Element) -> bool:
+    """True if this document looks like a legacy macro set."""
+    try:
+        als.find_legacy_track(root)
+        return True
+    except RuntimeError:
+        return False
+
+
+def _clamp01(v: float) -> float:
+    return max(0.0, min(1.0, v))
