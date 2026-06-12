@@ -7,3 +7,8 @@ build/
 *.egg-info/
 .DS_Store
 out/
+
+# Local working sets (real conversion input/output, not fixtures)
+legacy_input/
+legacy_output/
+Backup/
