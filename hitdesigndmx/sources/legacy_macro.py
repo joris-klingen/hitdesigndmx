@@ -137,19 +137,28 @@ def _parse_envelopes(clip: ET.Element, roles: dict[int, str]) -> dict[str, _Env]
 # collapses the flats back, so only genuine ramps keep the extra steps.
 SUBGRID_BEATS = 0.5
 
+# Quantize every segment boundary to this grid (1/16 note) so all emitted notes
+# land on-grid; sub-grid noise between two boundaries that round together is
+# dropped. Snapping here (rather than at note time) keeps segments contiguous,
+# so notes never overlap after quantizing.
+QUANTIZE_BEATS = 0.25
+
 
 def _boundaries(macros: dict[str, _Env], length: float) -> list[float]:
-    times = {0.0, length}
+    def q(t: float) -> float:
+        return round(round(t / QUANTIZE_BEATS) * QUANTIZE_BEATS, 6)
+
+    times = {0.0, q(length)}
     for env in macros.values():
         for pt, _ in env.points:
             if 0.0 <= pt <= length:
-                times.add(pt)
+                times.add(q(pt))
     g = SUBGRID_BEATS
     n = 1
     while n * g < length:
-        times.add(n * g)
+        times.add(q(n * g))
         n += 1
-    return sorted(times)
+    return sorted(t for t in times if t <= length)
 
 
 def _pan_to_bars(pan: float) -> frozenset[int]:

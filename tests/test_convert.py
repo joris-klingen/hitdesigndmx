@@ -39,7 +39,7 @@ def test_golden_counts(tmp_path):
     assert res.target == "hitnote_v1"
     assert res.clips_in == 519
     assert res.clips_written == 513      # 6 fully-dark clips emit nothing
-    assert 16000 <= res.notes_written <= 20000
+    assert 15000 <= res.notes_written <= 20000
 
 
 def test_track_inserted_before_returns(converted):
@@ -152,23 +152,47 @@ def test_linear_envelope_sampling():
     assert abs(step.sample(1.0) - 0.8) < 1e-6
 
 
-def test_fade_from_black_climbs_in_velocity(clips):
-    """A fade-in (e.g. 'App Warm') becomes a staircase of same-hue palette notes
-    with rising velocity — and is NOT mistaken for spatial movement."""
-    aw = next((ir for ir in clips if ir.name.lower().startswith("app warm")), None)
-    if aw is None:
-        pytest.skip("fixture has no App Warm clip")
-    notes = V.encode(aw)
+def test_fade_ramp_becomes_climbing_velocity():
+    """A brightness ramp lowers to a staircase of same-hue palette notes whose
+    velocity climbs — reproducing a fade-from-black via MIDI velocity."""
+    from hitdesigndmx.semantic import ClipIR, LightSegment
+
+    segs = [LightSegment(t0=i * 0.5, t1=(i + 1) * 0.5, color=(0.12 * (i + 1), 0.0, 0.0))
+            for i in range(8)]
+    ir = ClipIR(name="synthetic ramp", slot=0, length_beats=4.0, segments=segs)
     pal = sorted(
-        (n for n in notes if V.PRIMARY_PALETTE_START <= n.pitch < V.SECONDARY_PALETTE_START),
+        (n for n in V.encode(ir) if V.PRIMARY_PALETTE_START <= n.pitch < V.SECONDARY_PALETTE_START),
         key=lambda n: n.start,
     )
     vels = [n.velocity for n in pal]
     assert len(vels) >= 4
-    assert vels == sorted(vels)                       # monotonic rise
+    assert vels == sorted(vels)        # monotonic rise = a fade-in
     assert vels[-1] > vels[0]
-    # a fade is a swell, not movement — no selector pattern
-    assert V._clip_plan(aw).mode != "selectors"
+
+
+def test_app_warm_is_static_warm(clips):
+    """Named cue: 'App Warm' (the calm applause moment) renders one steady warm
+    note — no movement, no recipe, no fade staircase."""
+    aw = [ir for ir in clips if "app warm" in ir.name.lower()]
+    assert aw, "fixture should contain App Warm cues"
+    for ir in aw:
+        assert V._clip_plan(ir).mode == "static"
+        pitches = {n.pitch for n in V.encode(ir)}
+        assert pitches, "App Warm should still light something"
+        # only the warm amber palette note (spots 1..4 allowed); nothing in the
+        # bar/zone/chase/breathe/wild/multicolor range (5..83) → no movement.
+        assert not any(5 <= p <= 83 for p in pitches)
+        palette = {p for p in pitches if V.PRIMARY_PALETTE_START <= p < V.SECONDARY_PALETTE_START}
+        assert palette == {V.APP_WARM_NOTE}
+
+
+def test_all_notes_quantized_to_sixteenth(clips):
+    """Every note onset and offset lands on the 1/16 (0.25-beat) grid."""
+    grid = 0.25
+    for ir in clips:
+        for n in V.encode(ir):
+            for t in (n.start, n.start + n.dur):
+                assert abs(t / grid - round(t / grid)) < 1e-4
 
 
 def test_movement_clips_drive_selectors(clips):

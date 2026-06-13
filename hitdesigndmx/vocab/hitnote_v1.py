@@ -90,6 +90,7 @@ PRIMARY_PALETTE: list[tuple[float, float, float]] = [
 ]
 RED_INDEX = 1
 BLACK_INDEX = 0
+AMBER_INDEX = 4
 WARM_WHITE_INDEX = 21
 COOL_WHITE_INDEX = 22
 
@@ -160,6 +161,12 @@ PATTERNS = [
 ]
 
 MIN_NOTE_BEATS = 1.0 / 32.0  # drop sub-perceptual slivers (clip-edge artifacts)
+
+# Named-cue overrides. Some clips are specific show moments whose intent the
+# automation doesn't capture. "App(lause) Warm" is the calm-down moment after a
+# song — a steady, not-too-bright warm wash, no movement and no fade dynamics.
+APP_WARM_NOTE = PRIMARY_PALETTE_START + AMBER_INDEX  # warm yellow (Amber)
+APP_WARM_VEL = 64.0  # "not so bright" — moderate, steady intensity
 
 
 @dataclass
@@ -253,14 +260,23 @@ def _attacks(ir: ClipIR) -> int:
     return n
 
 
+def _is_app_warm(name: str) -> bool:
+    return "app warm" in name.lower()
+
+
 def _clip_plan(ir: ClipIR) -> _Plan:
     """Decide the clip's bold grid character from its shape — deterministically.
 
-    Priority: barmode → a chase; else genuine *movement* (oscillating
-    brightness) → a bar/zone-selector pattern stepped by the rhythm; else
-    washed-out (no strong hue) → a self-coloured Multicolor recipe; else a
-    brightness-recipe texture sized to the clip's pace (+ a ~30% pixel comb).
+    Named cues win first (e.g. App Warm → a static warm wash). Then: barmode →
+    a chase; else genuine *movement* (oscillating brightness) → a bar/zone-
+    selector pattern stepped by the rhythm; else washed-out (no strong hue) → a
+    self-coloured Multicolor recipe; else a brightness-recipe texture sized to
+    the clip's pace (+ a ~30% pixel comb).
     """
+    if _is_app_warm(ir.name):
+        # Calm applause moment: steady warm wash, no movement, no fade dynamics.
+        return _Plan("static", span_notes=[(APP_WARM_NOTE, APP_WARM_VEL)])
+
     seed = _seed(ir.name)
     if any(s.chase for s in ir.segments):
         return _Plan("chase", chase_note=_pick(CHASES, seed, 4))
@@ -366,7 +382,9 @@ def encode(ir: ClipIR) -> list[Note]:
         if seg.t1 <= seg.t0:
             continue
         intervals += _segment_intervals(seg)
-        if seg.color is None or seg.brightness <= 0.0:
+        if plan.mode == "static" or seg.color is None or seg.brightness <= 0.0:
+            # 'static' replaces the per-segment colour wash with a single steady
+            # span note (emitted below), so skip the faithful colour here.
             continue
         intervals.append((_palette_note(seg.color), seg.t0, seg.t1, _vel(seg.brightness)))
         if plan.mode == "selectors":

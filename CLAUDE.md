@@ -51,6 +51,11 @@ What the encoder/decoder now do:
   (chase for barmode, Breathe/Wild/Multicolor texture by pace, ~30% pixel
   comb), held over lit spans. **Multicolor gated to washed-out clips.**
 - `vox → Spot WW (1+3)`; no blackout note 0 mid-clip (darkness = no notes).
+- **Everything quantized to 1/16** — boundaries snap to `QUANTIZE_BEATS`
+  (0.25) in the decoder, so all onsets/offsets land on-grid with no overlaps.
+- **Named cues** override the generic plan: `_is_app_warm` → a *static* warm
+  Amber wash (`APP_WARM_NOTE`/`APP_WARM_VEL`), no movement/fade — it's the calm
+  applause moment (56 such clips in the set). Add more named cues the same way.
 
 Tunable knobs in `vocab/hitnote_v1.py`: `ATTACK_DELTA`/`ATTACK_MIN` (what
 counts as "movement"), `PULSE_BEATS` (movement speed), `PATTERNS` (the
