@@ -196,16 +196,16 @@ def test_all_notes_quantized_to_sixteenth(clips):
 
 
 def test_movement_clips_drive_selectors(clips):
-    """Clips with active (oscillating) movement get a bar/zone-selector pattern.
-    Vertical-zone notes (12..20) are emitted *only* by that pattern, so they're
+    """Clips with active (oscillating) movement get a rhythmic selector pattern;
+    calm clips drift a zone band. Vertical-zone notes (12..20) are emitted *only*
+    by those two spatial modes — never by a chase/static/none clip — so they're
     a clean marker that spatial movement is happening across the set."""
     movers = [ir for ir in clips if V._clip_plan(ir).mode == "selectors"]
     assert len(movers) > 50                            # a substantial share move
 
     zone_clips = 0
     for ir in clips:
-        has_zone = any(12 <= n.pitch <= 20 for n in V.encode(ir))
-        if has_zone:
+        if any(12 <= n.pitch <= 20 for n in V.encode(ir)):
             zone_clips += 1
-            assert V._clip_plan(ir).mode == "selectors"
-    assert zone_clips > 0
+            assert V._clip_plan(ir).mode in ("selectors", "calm")
+    assert zone_clips > 100                             # zones used widely now

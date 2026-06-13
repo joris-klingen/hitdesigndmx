@@ -95,70 +95,73 @@ WARM_WHITE_INDEX = 21
 COOL_WHITE_INDEX = 22
 
 # ---- expressive defaults (all freely tunable) ----------------------------
-SELECTOR_VEL = 100.0   # bar/spot/comb selectors: a fixed >=64 so the route is primary
-DYN_VEL = 80.0         # creative brightness/colour recipes (speed/density feel)
+SELECTOR_VEL = 100.0   # bar/zone/spot selectors: a fixed >=64 so the route is primary
+DYN_VEL = 64.0         # self-coloured Multicolor recipes (velocity → speed)
+BREATHE_VEL = 56.0     # gentle Breathes: soft = patchy islands + half speed (subtle)
 CHASE_VEL = 70.0       # chase tail length (soft = longer comet)
 VEL_FLOOR = 50.0       # palette intensity floor → dim stays dim, fades stay short
 MERGE_VEL_TOL = 6.0    # contiguous same-pitch holds merge if velocity within this
 WHITE_SAT = 0.18       # below this saturation a colour is treated as white
 
-# Curated recipe pools — chosen because they read well on the rig. Picked
-# deterministically per clip so re-runs are identical and each clip keeps its
-# own recognisable character.
+# Curated recipe pools — kept deliberately *gentle* (Breathes / soft movers,
+# no Sparkles) so the grid reads calm; the spatial interest comes from moving
+# the lit region around, not from busy brightness effects. Picked per clip by
+# seed so re-runs are identical and each clip keeps its character.
 CHASES = list(range(CHASES_START, CHASES_START + NUM_CHASES))      # 24..35
-BUSY_TEXTURE = [49, 50, 26, 29]            # Sparkle, Sparkle few, Ping-pong, Snake
-SUSTAINED_TEXTURE = [36, 37, 44, 46, 47]   # Breathe, Sine, Drift, Shimmer, Sway
-MEDIUM_TEXTURE = [36, 46, 47, 49, 32]      # Breathe, Shimmer, Sway, Sparkle, Waves
+SUSTAINED_TEXTURE = [36, 37, 46, 47, 44]   # Breathe, Sine, Shimmer, Sway, Drift
+MEDIUM_TEXTURE = [36, 37, 46, 47]          # Breathe, Sine, Shimmer, Sway
 MULTICOLOR_TEXTURE = [60, 69, 70, 72, 74, 79]  # Rainbow, Ocean, Forest, Sunset, Borealis, Plasma
-COMBS = [PIXEL_EVEN, PIXEL_ODD, PIXEL_THIRDS]
-COMB_FRACTION = 30  # ~% of eligible clips that also get a spatial comb
 
-# Rhythm → spatial movement. When a clip's brightness oscillates (repeated
-# attacks, not a single fade) the original intent was *movement*; we use the
-# rhythm as a guide to step a bar/zone-selector pattern, so the colour jumps
-# around the rig on the beat instead of just pulsing in place. Bar selectors
-# (5..8) and pixel-zone selectors (12..20 = vertical zones 1..9) can be held
-# together to carve effects (e.g. a corner = one bar ∩ one zone).
-ATTACK_DELTA = 0.20  # a brightness rise this big counts as a rhythmic attack
-ATTACK_MIN = 4       # clips with at least this many attacks move spatially
-PULSE_BEATS = 1.0    # selector pattern advances one step per this many beats
-_ZONE = lambda z: 12 + (z - 1)           # vertical zone 1..9 → pixel-zone note
-_BAR = BAR_SELECTOR                       # bar 1..4 → selector note 5..8
-
-
-def _pat_left_right(k: int) -> list[int]:
-    return [_BAR[1], _BAR[2]] if k % 2 == 0 else [_BAR[3], _BAR[4]]
+# Spatial movement. The lit region is kept *small and travelling* — a quarter
+# / band / quadrant that moves around the grid — rather than a static half, so
+# coverage varies and the rig never sits on the same pixels too long. Bar
+# selectors (5..8) and vertical-zone selectors (12..20 = zones 1..9) combine
+# (a region = bar subset ∩ zone band). Rhythmic clips step a pattern on the
+# beat; calm clips drift a wider zone band slowly under the pan bars.
+ATTACK_DELTA = 0.20   # a brightness rise this big counts as a rhythmic attack
+ATTACK_MIN = 4        # clips with at least this many attacks move on the beat
+PULSE_BEATS = 1.0     # rhythmic pattern advances one step per this many beats
+CALM_PULSE_BEATS = 3.0  # calm zone-band drifts one step per this many beats
+_ZONE = lambda z: 12 + (z - 1)            # vertical zone 1..9 → pixel-zone note
+_BAR = BAR_SELECTOR                        # bar 1..4 → selector note 5..8
 
 
-def _pat_sequence(k: int) -> list[int]:           # bar 1→2→3→4→…
-    return [_BAR[1 + k % 4]]
+def _zone_band(center: int, width: int) -> list[int]:
+    """Notes for a band of ``width`` vertical zones centred on ``center`` (a
+    horizontal stripe across the bars), clamped to the 1..9 range."""
+    lo = center - width // 2
+    return [_ZONE(z) for z in range(lo, lo + width) if 1 <= z <= 9]
 
 
-def _pat_pingpong(k: int) -> list[int]:           # bar 1→2→3→4→3→2→…
-    seq = [1, 2, 3, 4, 3, 2]
-    return [_BAR[seq[k % len(seq)]]]
+# Rhythmic patterns (step → selector notes). Each lights a small region that
+# travels, and most combine a bar with a zone band so movement roams the grid.
+def _pat_bar_pingpong(k: int) -> list[int]:        # one bar sweeps L↔R (quarter)
+    return [_BAR[[1, 2, 3, 4, 3, 2][k % 6]]]
 
 
-def _pat_zone_up(k: int) -> list[int]:            # vertical slice climbs the rig
-    return [_ZONE(1 + k % 9)]
+def _pat_zone_pingpong(k: int) -> list[int]:       # a zone band sweeps up↕down
+    seq = [1, 2, 3, 4, 5, 6, 7, 8, 9, 8, 7, 6, 5, 4, 3, 2]
+    return _zone_band(seq[k % len(seq)], 3)
 
 
-def _pat_diagonal(k: int) -> list[int]:           # top-right ↔ bottom-left corner
-    return [_BAR[4], _ZONE(9)] if k % 2 == 0 else [_BAR[1], _ZONE(1)]
+def _pat_quadrant(k: int) -> list[int]:            # a quadrant rotates round the rig
+    bars, zc = [((1, 2), 3), ((3, 4), 3), ((3, 4), 7), ((1, 2), 7)][k % 4]
+    return [_BAR[b] for b in bars] + _zone_band(zc, 3)
 
 
-def _pat_out_in(k: int) -> list[int]:             # outer pair ↔ inner pair
-    return [_BAR[1], _BAR[4]] if k % 2 == 0 else [_BAR[2], _BAR[3]]
+def _pat_diag_travel(k: int) -> list[int]:         # a small cell travels diagonally
+    return [_BAR[1 + k % 4]] + _zone_band(1 + (2 * k) % 9, 2)
 
 
-PATTERNS = [
-    _pat_left_right,
-    _pat_sequence,
-    _pat_pingpong,
-    _pat_zone_up,
-    _pat_diagonal,
-    _pat_out_in,
-]
+PATTERNS = [_pat_bar_pingpong, _pat_zone_pingpong, _pat_quadrant, _pat_diag_travel]
+
+
+def _drift_zone(k: int) -> list[int]:
+    """Calm spatial drift: a soft zone band that wanders low↕high slowly. Held
+    under the pan bars, it keeps the lit area partial and gently moving instead
+    of a static colour wash over the whole (or half the) rig."""
+    return _zone_band([2, 4, 6, 8, 6, 4][k % 6], 3)
+
 
 MIN_NOTE_BEATS = 1.0 / 32.0  # drop sub-perceptual slivers (clip-edge artifacts)
 
@@ -228,13 +231,19 @@ def _bar_holds(bars: frozenset[int]) -> list[tuple[int, float]]:
 # ---- per-clip creative layer ---------------------------------------------
 @dataclass
 class _Plan:
-    """How a clip's grid is brought to life. Exactly one ``mode`` drives the
-    movement; the others' fields stay empty."""
+    """How a clip's grid is brought to life.
 
-    mode: str                                  # chase | selectors | recipe | none
+    ``mode`` selects the spatial treatment: ``static`` (one steady wash, named
+    cues), ``chase`` (barmode), ``selectors`` (rhythmic — a travelling pattern
+    on the beat, replacing the pan bars), ``calm`` (a slow zone-band drift under
+    the pan bars + a gentle held recipe), or ``none``.
+    """
+
+    mode: str
     chase_note: int | None = None              # 'chase': held over barmode runs
-    pattern: object = None                     # 'selectors': step → selector notes
-    span_notes: list[tuple[int, float]] = None  # 'recipe': held over lit spans
+    pattern: object = None                     # step → selector notes (selectors/calm)
+    pulse: float = PULSE_BEATS                 # beats per pattern step
+    span_notes: list[tuple[int, float]] = None  # held over lit spans (recipe / static wash)
 
 
 def _seed(name: str) -> int:
@@ -286,23 +295,18 @@ def _clip_plan(ir: ClipIR) -> _Plan:
         return _Plan("none")
 
     if _attacks(ir) >= ATTACK_MIN:
-        return _Plan("selectors", pattern=PATTERNS[(seed >> 4) % len(PATTERNS)])
+        return _Plan("selectors", pattern=PATTERNS[(seed >> 4) % len(PATTERNS)],
+                     pulse=PULSE_BEATS)
 
+    # Calm clip: a gentle held recipe + a slow zone-band drift under the pan
+    # bars, so the lit area stays partial and wanders instead of a static wash.
     if sum(1 for s in lit if s.is_washed_out) / len(lit) > 0.6:
-        return _Plan("recipe", span_notes=[(_pick(MULTICOLOR_TEXTURE, seed, 4), DYN_VEL)])
-
-    avg_len = sum(s.t1 - s.t0 for s in lit) / len(lit)
-    if avg_len < 1.0:
-        pool = BUSY_TEXTURE
-    elif avg_len >= 2.0:
-        pool = SUSTAINED_TEXTURE
+        recipe = (_pick(MULTICOLOR_TEXTURE, seed, 4), DYN_VEL)
     else:
-        pool = MEDIUM_TEXTURE
-
-    span_notes = [(_pick(pool, seed, 4), DYN_VEL)]
-    if (seed >> 20) % 100 < COMB_FRACTION:
-        span_notes.append((_pick(COMBS, seed, 24), SELECTOR_VEL))
-    return _Plan("recipe", span_notes=span_notes)
+        avg_len = sum(s.t1 - s.t0 for s in lit) / len(lit)
+        pool = SUSTAINED_TEXTURE if avg_len >= 2.0 else MEDIUM_TEXTURE
+        recipe = (_pick(pool, seed, 4), BREATHE_VEL)
+    return _Plan("calm", pattern=_drift_zone, pulse=CALM_PULSE_BEATS, span_notes=[recipe])
 
 
 # ---- segment + span → hold intervals -------------------------------------
@@ -387,13 +391,18 @@ def encode(ir: ClipIR) -> list[Note]:
             # span note (emitted below), so skip the faithful colour here.
             continue
         intervals.append((_palette_note(seg.color), seg.t0, seg.t1, _vel(seg.brightness)))
+        step = int(seg.t0 / plan.pulse + 1e-6)  # which grid cell → pattern step
         if plan.mode == "selectors":
-            # which beat-grid cell this segment starts in → pattern step,
-            # so segments inside one beat share a position (and coalesce).
-            step = int(seg.t0 / PULSE_BEATS + 1e-6)
+            # the travelling pattern *replaces* the pan bars.
             for pitch in plan.pattern(step):
                 intervals.append((pitch, seg.t0, seg.t1, SELECTOR_VEL))
-        else:
+        elif plan.mode == "calm":
+            # pan bars, narrowed by a slowly-drifting zone band.
+            for pitch, vel in _bar_holds(seg.bars):
+                intervals.append((pitch, seg.t0, seg.t1, vel))
+            for pitch in plan.pattern(step):
+                intervals.append((pitch, seg.t0, seg.t1, SELECTOR_VEL))
+        else:  # chase: pan bars under the chase
             for pitch, vel in _bar_holds(seg.bars):
                 intervals.append((pitch, seg.t0, seg.t1, vel))
 

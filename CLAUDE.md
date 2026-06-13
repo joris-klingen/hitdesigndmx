@@ -42,14 +42,16 @@ What the encoder/decoder now do:
   jumps/ramps survive, each landing exactly on the beat.
 - **Fade-from-black** — a ramp becomes climbing-velocity palette notes (e.g.
   'App Warm' fades in vel 56→126), reproducing the swell with MIDI velocity.
-- **Rhythm → spatial movement** — clips whose brightness *oscillates*
-  (`_attacks` ≥ `ATTACK_MIN`, distinct from a one-way fade) drive a
-  bar/zone-**selector pattern** (`PATTERNS`: L/R, 1-2-3-4, ping-pong, zone-up,
-  diagonal corner = bar∩zone, out-in) stepped on a `PULSE_BEATS` grid, so the
-  colour jumps around the rig on the beat. ~190 clips move this way.
-- **Bold grid dynamics** (non-movers) — one deterministic recipe per clip
-  (chase for barmode, Breathe/Wild/Multicolor texture by pace, ~30% pixel
-  comb), held over lit spans. **Multicolor gated to washed-out clips.**
+- **Small, travelling lit regions** — coverage is kept partial and moving (no
+  static half). Rhythmic clips (`_attacks` ≥ `ATTACK_MIN`) step a travelling
+  `PATTERNS` entry on the beat (`PULSE_BEATS`): bar ping-pong, zone-band
+  up/down sweep, rotating quadrant, diagonal cell — each a quarter/band/cell
+  that roams the grid, replacing the pan bars. Calm clips (`calm` mode) keep
+  the pan bars but narrow them with a **slowly drifting zone band**
+  (`_drift_zone`, `CALM_PULSE_BEATS`) so the area wanders instead of sitting.
+- **Gentle dynamics** — recipe pools are Breathes/soft movers only (no
+  Sparkles); `BREATHE_VEL` low for patchy, subtle islands. **Multicolor gated
+  to washed-out clips.** Movement, not busy brightness, carries the interest.
 - `vox → Spot WW (1+3)`; no blackout note 0 mid-clip (darkness = no notes).
 - **Everything quantized to 1/16** — boundaries snap to `QUANTIZE_BEATS`
   (0.25) in the decoder, so all onsets/offsets land on-grid with no overlaps.
@@ -58,9 +60,11 @@ What the encoder/decoder now do:
   applause moment (56 such clips in the set). Add more named cues the same way.
 
 Tunable knobs in `vocab/hitnote_v1.py`: `ATTACK_DELTA`/`ATTACK_MIN` (what
-counts as "movement"), `PULSE_BEATS` (movement speed), `PATTERNS` (the
-spatial vocabulary), `VEL_FLOOR`, `COMB_FRACTION`; and `SUBGRID_BEATS`/`TAU_*`
-in `sources/legacy_macro.py` (fade smoothness / merge aggressiveness).
+counts as "movement"), `PULSE_BEATS`/`CALM_PULSE_BEATS` (movement/drift speed),
+`PATTERNS` + `_drift_zone` + `_zone_band` width (the spatial vocabulary &
+coverage), `BREATHE_VEL`/`DYN_VEL` (dynamics subtlety), `VEL_FLOOR`; and
+`SUBGRID_BEATS`/`TAU_*`/`QUANTIZE_BEATS` in `sources/legacy_macro.py` (fade
+smoothness / merge aggressiveness / 1-16 grid).
 
 Known tradeoff: palette-note velocity sets **both** intensity *and* fade
 duration, so a dim wash fades in over up to ~2 s. Attack timing stays exact;
