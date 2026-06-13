@@ -112,6 +112,55 @@ MULTICOLOR_TEXTURE = [60, 69, 70, 72, 74, 79]  # Rainbow, Ocean, Forest, Sunset,
 COMBS = [PIXEL_EVEN, PIXEL_ODD, PIXEL_THIRDS]
 COMB_FRACTION = 30  # ~% of eligible clips that also get a spatial comb
 
+# Rhythm → spatial movement. When a clip's brightness oscillates (repeated
+# attacks, not a single fade) the original intent was *movement*; we use the
+# rhythm as a guide to step a bar/zone-selector pattern, so the colour jumps
+# around the rig on the beat instead of just pulsing in place. Bar selectors
+# (5..8) and pixel-zone selectors (12..20 = vertical zones 1..9) can be held
+# together to carve effects (e.g. a corner = one bar ∩ one zone).
+ATTACK_DELTA = 0.20  # a brightness rise this big counts as a rhythmic attack
+ATTACK_MIN = 4       # clips with at least this many attacks move spatially
+PULSE_BEATS = 1.0    # selector pattern advances one step per this many beats
+_ZONE = lambda z: 12 + (z - 1)           # vertical zone 1..9 → pixel-zone note
+_BAR = BAR_SELECTOR                       # bar 1..4 → selector note 5..8
+
+
+def _pat_left_right(k: int) -> list[int]:
+    return [_BAR[1], _BAR[2]] if k % 2 == 0 else [_BAR[3], _BAR[4]]
+
+
+def _pat_sequence(k: int) -> list[int]:           # bar 1→2→3→4→…
+    return [_BAR[1 + k % 4]]
+
+
+def _pat_pingpong(k: int) -> list[int]:           # bar 1→2→3→4→3→2→…
+    seq = [1, 2, 3, 4, 3, 2]
+    return [_BAR[seq[k % len(seq)]]]
+
+
+def _pat_zone_up(k: int) -> list[int]:            # vertical slice climbs the rig
+    return [_ZONE(1 + k % 9)]
+
+
+def _pat_diagonal(k: int) -> list[int]:           # top-right ↔ bottom-left corner
+    return [_BAR[4], _ZONE(9)] if k % 2 == 0 else [_BAR[1], _ZONE(1)]
+
+
+def _pat_out_in(k: int) -> list[int]:             # outer pair ↔ inner pair
+    return [_BAR[1], _BAR[4]] if k % 2 == 0 else [_BAR[2], _BAR[3]]
+
+
+PATTERNS = [
+    _pat_left_right,
+    _pat_sequence,
+    _pat_pingpong,
+    _pat_zone_up,
+    _pat_diagonal,
+    _pat_out_in,
+]
+
+MIN_NOTE_BEATS = 1.0 / 32.0  # drop sub-perceptual slivers (clip-edge artifacts)
+
 
 @dataclass
 class Note:
@@ -171,9 +220,14 @@ def _bar_holds(bars: frozenset[int]) -> list[tuple[int, float]]:
 
 # ---- per-clip creative layer ---------------------------------------------
 @dataclass
-class _Creative:
-    span_notes: list[tuple[int, float]]  # (pitch, vel) held over every lit span
-    chase_note: int | None               # held over barmode runs instead
+class _Plan:
+    """How a clip's grid is brought to life. Exactly one ``mode`` drives the
+    movement; the others' fields stay empty."""
+
+    mode: str                                  # chase | selectors | recipe | none
+    chase_note: int | None = None              # 'chase': held over barmode runs
+    pattern: object = None                     # 'selectors': step → selector notes
+    span_notes: list[tuple[int, float]] = None  # 'recipe': held over lit spans
 
 
 def _seed(name: str) -> int:
@@ -185,29 +239,41 @@ def _pick(seq: list[int], seed: int, salt: int) -> int:
     return seq[(seed >> salt) % len(seq)]
 
 
-def _creative_layer(ir: ClipIR) -> _Creative:
+def _attacks(ir: ClipIR) -> int:
+    """Count significant brightness rises across the clip (dark = 0). A single
+    fade/swell scores ~0 (its staircase steps are below ATTACK_DELTA); a
+    pulsing clip scores one per hit — our 'active movement' signal."""
+    n = 0
+    prev = 0.0
+    for s in ir.segments:
+        b = s.brightness if s.color is not None else 0.0
+        if b - prev >= ATTACK_DELTA:
+            n += 1
+        prev = b
+    return n
+
+
+def _clip_plan(ir: ClipIR) -> _Plan:
     """Decide the clip's bold grid character from its shape — deterministically.
 
-    barmode → a chase (held over the barmode runs). Otherwise a single texture
-    recipe held over the lit spans, sized to the clip's pace: busy clips get
-    energetic Wild/short chases, sustained clips get gentle Breathes, and a
-    deterministic ~30% also get a pixel-zone comb for spatial bite. Washed-out
-    clips (no strong hue) get a self-coloured Multicolor recipe instead — the
-    only place hue is allowed to be overridden.
+    Priority: barmode → a chase; else genuine *movement* (oscillating
+    brightness) → a bar/zone-selector pattern stepped by the rhythm; else
+    washed-out (no strong hue) → a self-coloured Multicolor recipe; else a
+    brightness-recipe texture sized to the clip's pace (+ a ~30% pixel comb).
     """
     seed = _seed(ir.name)
-    # barmode comes first: a barmode clip may carry no wash colour at all, yet
-    # still wants its chase (rendered white by hitnotedmx's white-default).
     if any(s.chase for s in ir.segments):
-        return _Creative([], _pick(CHASES, seed, 4))
+        return _Plan("chase", chase_note=_pick(CHASES, seed, 4))
 
     lit = [s for s in ir.segments if s.color is not None]
     if not lit:
-        return _Creative([], None)
+        return _Plan("none")
 
-    washed = sum(1 for s in lit if s.is_washed_out) / len(lit) > 0.6
-    if washed:
-        return _Creative([(_pick(MULTICOLOR_TEXTURE, seed, 4), DYN_VEL)], None)
+    if _attacks(ir) >= ATTACK_MIN:
+        return _Plan("selectors", pattern=PATTERNS[(seed >> 4) % len(PATTERNS)])
+
+    if sum(1 for s in lit if s.is_washed_out) / len(lit) > 0.6:
+        return _Plan("recipe", span_notes=[(_pick(MULTICOLOR_TEXTURE, seed, 4), DYN_VEL)])
 
     avg_len = sum(s.t1 - s.t0 for s in lit) / len(lit)
     if avg_len < 1.0:
@@ -220,17 +286,15 @@ def _creative_layer(ir: ClipIR) -> _Creative:
     span_notes = [(_pick(pool, seed, 4), DYN_VEL)]
     if (seed >> 20) % 100 < COMB_FRACTION:
         span_notes.append((_pick(COMBS, seed, 24), SELECTOR_VEL))
-    return _Creative(span_notes, None)
+    return _Plan("recipe", span_notes=span_notes)
 
 
 # ---- segment + span → hold intervals -------------------------------------
 def _segment_intervals(seg: LightSegment) -> list[tuple[int, float, float, float]]:
-    """Per-segment holds: the faithful colour wash (+ bar restriction), strobe,
-    and singer spots. Creative dynamics are added per-span, not here."""
+    """Per-segment holds that don't depend on the clip's movement plan: strobe
+    and singer spots. Colour and bar/zone selection are emitted in ``encode``
+    (the selector pattern, when active, replaces the pan-based bars)."""
     out: list[tuple[int, float, float, float]] = []
-    if seg.color is not None and seg.brightness > 0.0:
-        out.append((_palette_note(seg.color), seg.t0, seg.t1, _vel(seg.brightness)))
-        out += [(p, seg.t0, seg.t1, v) for p, v in _bar_holds(seg.bars)]
     if seg.strobe > 0.0:
         out.append((STROBE, seg.t0, seg.t1, _vel(seg.strobe, lo=1.0)))
     if seg.spots_warm:
@@ -276,7 +340,7 @@ def _emit(intervals: list[tuple[int, float, float, float]], length: float) -> li
         for t0, t1, vel in merged:
             t0c = max(0.0, min(t0, length))
             t1c = max(0.0, min(t1, length))
-            if t1c - t0c > 1e-6:
+            if t1c - t0c >= MIN_NOTE_BEATS:
                 notes.append(Note(pitch=pitch, start=t0c, dur=t1c - t0c, velocity=vel))
 
     notes.sort(key=lambda n: (n.start, n.pitch))
@@ -286,25 +350,41 @@ def _emit(intervals: list[tuple[int, float, float, float]], length: float) -> li
 def encode(ir: ClipIR) -> list[Note]:
     """Lower one clip's IR into hitnotedmx notes.
 
-    Two layers compose: a faithful, strictly-timed colour wash per segment, and
-    a bold per-clip creative layer (recipes / combs) held over the lit spans.
-    Both are coalesced so sustained intent is single long notes. No blackout
-    note 0 is ever emitted mid-clip — bars simply go dark where no colour is
-    held, leaving any singer spots untouched.
+    A faithful, strictly-timed colour wash per segment composes with one bold
+    movement layer chosen by ``_clip_plan``: a barmode chase, a rhythm-stepped
+    bar/zone-selector pattern, or a held recipe. In selector mode the pattern
+    advances on a ``PULSE_BEATS`` grid (so movement stays musical regardless of
+    how finely the colour is segmented) and supplies the bars in place of the
+    pan restriction; otherwise the bars come from the pan. Everything is
+    coalesced so sustained intent is single long notes, and no blackout note 0
+    is emitted (darkness = absence of notes, leaving singer spots untouched).
     """
+    plan = _clip_plan(ir)
     intervals: list[tuple[int, float, float, float]] = []
+
     for seg in ir.segments:
         if seg.t1 <= seg.t0:
             continue
         intervals += _segment_intervals(seg)
+        if seg.color is None or seg.brightness <= 0.0:
+            continue
+        intervals.append((_palette_note(seg.color), seg.t0, seg.t1, _vel(seg.brightness)))
+        if plan.mode == "selectors":
+            # which beat-grid cell this segment starts in → pattern step,
+            # so segments inside one beat share a position (and coalesce).
+            step = int(seg.t0 / PULSE_BEATS + 1e-6)
+            for pitch in plan.pattern(step):
+                intervals.append((pitch, seg.t0, seg.t1, SELECTOR_VEL))
+        else:
+            for pitch, vel in _bar_holds(seg.bars):
+                intervals.append((pitch, seg.t0, seg.t1, vel))
 
-    creative = _creative_layer(ir)
-    if creative.span_notes:
+    if plan.span_notes:
         for a, b in _runs(ir.segments, lambda s: s.color is not None):
-            for pitch, vel in creative.span_notes:
+            for pitch, vel in plan.span_notes:
                 intervals.append((pitch, a, b, vel))
-    if creative.chase_note is not None:
+    if plan.chase_note is not None:
         for a, b in _runs(ir.segments, lambda s: s.chase):
-            intervals.append((creative.chase_note, a, b, CHASE_VEL))
+            intervals.append((plan.chase_note, a, b, CHASE_VEL))
 
     return _emit(intervals, ir.length_beats)

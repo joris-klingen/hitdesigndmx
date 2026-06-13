@@ -35,29 +35,40 @@ What the encoder/decoder now do:
 - **Colour matched, not red** — `pick_color_index` nearest-matches hue on
   *normalised* RGB (dim red → Red, not Crimson); intensity rides palette-note
   velocity. The set now uses 20+ palette colours.
-- **Strict timing** — decoder (`legacy_macro.py`) collapses micro-ripple by
-  significance (`TAU_L` / `TAU_CHROMA`) so every surviving boundary is a real
-  jump; encoder onsets a palette note exactly at each colour-segment start.
-- **Bold grid dynamics** — `_creative_layer` adds one deterministic recipe per
-  clip (chase for barmode, Breathe/Wild texture sized to the clip's pace, a
-  ~30% pixel-zone comb), held only over lit spans. **Multicolor recipes are
-  gated to washed-out clips** (they override hue).
+- **Linear automation + strict timing** — `_Env.sample` reads envelopes as
+  piecewise-**linear** (Ableton's real model; the old sample-and-hold lost
+  every fade). A `SUBGRID_BEATS` grid turns ramps into staircases; the
+  significance merge (`TAU_L`/`TAU_CHROMA`) collapses flats so only genuine
+  jumps/ramps survive, each landing exactly on the beat.
+- **Fade-from-black** — a ramp becomes climbing-velocity palette notes (e.g.
+  'App Warm' fades in vel 56→126), reproducing the swell with MIDI velocity.
+- **Rhythm → spatial movement** — clips whose brightness *oscillates*
+  (`_attacks` ≥ `ATTACK_MIN`, distinct from a one-way fade) drive a
+  bar/zone-**selector pattern** (`PATTERNS`: L/R, 1-2-3-4, ping-pong, zone-up,
+  diagonal corner = bar∩zone, out-in) stepped on a `PULSE_BEATS` grid, so the
+  colour jumps around the rig on the beat. ~190 clips move this way.
+- **Bold grid dynamics** (non-movers) — one deterministic recipe per clip
+  (chase for barmode, Breathe/Wild/Multicolor texture by pace, ~30% pixel
+  comb), held over lit spans. **Multicolor gated to washed-out clips.**
 - `vox → Spot WW (1+3)`; no blackout note 0 mid-clip (darkness = no notes).
 
+Tunable knobs in `vocab/hitnote_v1.py`: `ATTACK_DELTA`/`ATTACK_MIN` (what
+counts as "movement"), `PULSE_BEATS` (movement speed), `PATTERNS` (the
+spatial vocabulary), `VEL_FLOOR`, `COMB_FRACTION`; and `SUBGRID_BEATS`/`TAU_*`
+in `sources/legacy_macro.py` (fade smoothness / merge aggressiveness).
+
 Known tradeoff: palette-note velocity sets **both** intensity *and* fade
-duration, so a dim wash fades in over up to ~2 s. Onsets still land on the
-beat (attack timing is exact); only the rise-time of dim segments softens.
-Tune `VEL_FLOOR` if hardware shows this is too soft.
+duration, so a dim wash fades in over up to ~2 s. Attack timing stays exact;
+only the rise-time of dim segments softens.
 
 Next, in priority order:
-1. **Eyeball on hardware** — confirm the colour spread, hit timing, and that
-   the bold dynamics read well; tune the curated recipe pools / `COMB_FRACTION`
-   / thresholds in `vocab/hitnote_v1.py` to taste.
+1. **Eyeball on hardware** — confirm colour, hit timing, the fades, and that
+   the selector movement reads well; tune the knobs above to taste. If movement
+   feels too frantic raise `PULSE_BEATS`; too sparse, lower `ATTACK_MIN`.
 2. **Mapping-drift test** — parse `../hitnotedmx/mappings/v1.tsv` (skip if
    sibling absent) and assert the vocab constants line up.
-3. **barmode-without-colour** currently renders a *white* chase (no wash colour
-   in the curve). Legacy convention was a red chase — consider injecting a dim
-   red for those segments if it reads better.
+3. **barmode-without-colour** still renders a *white* chase; legacy convention
+   was a red chase — consider injecting a dim red there if it reads better.
 
 `reference/lightgen_legacy_convert.py` still holds richer per-pixel pattern
 heuristics if the grid wants more variety later.

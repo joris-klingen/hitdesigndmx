@@ -39,7 +39,7 @@ def test_golden_counts(tmp_path):
     assert res.target == "hitnote_v1"
     assert res.clips_in == 519
     assert res.clips_written == 513      # 6 fully-dark clips emit nothing
-    assert 9000 <= res.notes_written <= 10800
+    assert 16000 <= res.notes_written <= 20000
 
 
 def test_track_inserted_before_returns(converted):
@@ -138,3 +138,50 @@ def test_deterministic(clips):
         a = [(n.pitch, n.start, n.dur, n.velocity) for n in V.encode(ir)]
         b = [(n.pitch, n.start, n.dur, n.velocity) for n in V.encode(ir)]
         assert a == b
+
+
+def test_linear_envelope_sampling():
+    """Automation is read as piecewise-linear (Ableton's model), so a ramp is
+    sampled mid-way, not held at its start value."""
+    from hitdesigndmx.sources.legacy_macro import _Env
+
+    env = _Env(points=[(0.0, 0.0), (4.0, 1.0)])  # 0→1 ramp over 4 beats
+    assert abs(env.sample(2.0) - 0.5) < 1e-6
+    # instantaneous step (two points at the same time) → post-step value
+    step = _Env(points=[(0.0, 0.2), (1.0, 0.2), (1.0, 0.8), (2.0, 0.8)])
+    assert abs(step.sample(1.0) - 0.8) < 1e-6
+
+
+def test_fade_from_black_climbs_in_velocity(clips):
+    """A fade-in (e.g. 'App Warm') becomes a staircase of same-hue palette notes
+    with rising velocity — and is NOT mistaken for spatial movement."""
+    aw = next((ir for ir in clips if ir.name.lower().startswith("app warm")), None)
+    if aw is None:
+        pytest.skip("fixture has no App Warm clip")
+    notes = V.encode(aw)
+    pal = sorted(
+        (n for n in notes if V.PRIMARY_PALETTE_START <= n.pitch < V.SECONDARY_PALETTE_START),
+        key=lambda n: n.start,
+    )
+    vels = [n.velocity for n in pal]
+    assert len(vels) >= 4
+    assert vels == sorted(vels)                       # monotonic rise
+    assert vels[-1] > vels[0]
+    # a fade is a swell, not movement — no selector pattern
+    assert V._clip_plan(aw).mode != "selectors"
+
+
+def test_movement_clips_drive_selectors(clips):
+    """Clips with active (oscillating) movement get a bar/zone-selector pattern.
+    Vertical-zone notes (12..20) are emitted *only* by that pattern, so they're
+    a clean marker that spatial movement is happening across the set."""
+    movers = [ir for ir in clips if V._clip_plan(ir).mode == "selectors"]
+    assert len(movers) > 50                            # a substantial share move
+
+    zone_clips = 0
+    for ir in clips:
+        has_zone = any(12 <= n.pitch <= 20 for n in V.encode(ir))
+        if has_zone:
+            zone_clips += 1
+            assert V._clip_plan(ir).mode == "selectors"
+    assert zone_clips > 0

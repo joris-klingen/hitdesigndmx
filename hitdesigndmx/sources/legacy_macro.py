@@ -62,20 +62,30 @@ TAU_CHROMA = 0.20  # normalised-RGB direction change below this is "same hue"
 
 @dataclass
 class _Env:
-    """Sorted (time, value) automation for one macro, normalised to 0..1."""
+    """Sorted (time, value) automation for one macro, normalised to 0..1.
+
+    Ableton clip envelopes are piecewise **linear** between breakpoints, with an
+    instantaneous step encoded as two breakpoints at the same time. ``sample``
+    therefore interpolates and, at a step, returns the value *after* the jump
+    (the right-hand limit) — so a segment whose start coincides with a step sees
+    the post-step value, and a ramp is read as the ramp, not held flat."""
 
     points: list[tuple[float, float]] = field(default_factory=list)
 
     def sample(self, t: float) -> float:
-        if not self.points:
+        pts = self.points
+        if not pts:
             return 0.0
-        chosen = self.points[0][1]
-        for pt, pv in self.points:
-            if pt <= t + 1e-9:
-                chosen = pv
-            else:
-                break
-        return chosen
+        if t >= pts[-1][0]:
+            return pts[-1][1]
+        for (t0, v0), (t1, v1) in zip(pts, pts[1:]):
+            if t1 <= t:          # interval ends at/before t → step past it
+                continue
+            if t0 > t:           # t precedes the first interval → clamp left
+                return v0
+            if t1 > t0:          # t0 <= t < t1, real (non-zero-width) interval
+                return v0 + (v1 - v0) * (t - t0) / (t1 - t0)
+        return pts[-1][1]
 
 
 def _read_macros(rack: ET.Element) -> tuple[dict[int, str], dict[str, float]]:
@@ -121,12 +131,24 @@ def _parse_envelopes(clip: ET.Element, roles: dict[int, str]) -> dict[str, _Env]
     return out
 
 
+# Ramp resolution: between breakpoints, sample on this beat grid so a linear
+# fade is broken into a staircase the encoder can render as climbing-velocity
+# notes (Ableton fades are linear, not stepped). The significance merge then
+# collapses the flats back, so only genuine ramps keep the extra steps.
+SUBGRID_BEATS = 0.5
+
+
 def _boundaries(macros: dict[str, _Env], length: float) -> list[float]:
     times = {0.0, length}
     for env in macros.values():
         for pt, _ in env.points:
             if 0.0 <= pt <= length:
                 times.add(pt)
+    g = SUBGRID_BEATS
+    n = 1
+    while n * g < length:
+        times.add(n * g)
+        n += 1
     return sorted(times)
 
 
