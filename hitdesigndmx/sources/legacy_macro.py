@@ -45,11 +45,19 @@ LIVE_PREROLL_TIME = -63072000.0  # sentinel Live writes for "value at clip start
 MACRO_FULL_SCALE = 127.0
 
 # Thresholds carried over from the original converter so behaviour matches.
-BARMODE_THRESHOLD = 0.05  # barmode above this → red chase replaces the wash
+BARMODE_THRESHOLD = 0.05  # barmode above this → chase overlay on the wash
 COLOR_ON = 0.02           # brightness above this → bars are considered lit
 SPOT_ON = 0.02            # vox above this → singer spots on
 PAN_LEFT = 0.35           # pan below → left bars only
 PAN_RIGHT = 0.65          # pan above → right bars only
+
+# Significance thresholds for collapsing micro-ripple while keeping strict
+# timing on real jumps. Two adjacent segments merge only when every structural
+# attribute matches AND the colour barely moved: brightness within TAU_L and
+# normalised-chroma direction within TAU_CHROMA. A jump bigger than either,
+# or any on↔off / structural change, stays a hard boundary.
+TAU_L = 0.12       # brightness step below this is "not a real jump"
+TAU_CHROMA = 0.20  # normalised-RGB direction change below this is "same hue"
 
 
 @dataclass
@@ -130,9 +138,55 @@ def _pan_to_bars(pan: float) -> frozenset[int]:
     return frozenset()  # centred → all bars
 
 
+def _chroma(rgb: tuple[float, float, float] | None) -> tuple[float, float, float]:
+    """Normalised colour direction (unit by max channel); black → origin."""
+    if rgb is None:
+        return (0.0, 0.0, 0.0)
+    m = max(rgb)
+    if m <= 1e-6:
+        return (0.0, 0.0, 0.0)
+    return (rgb[0] / m, rgb[1] / m, rgb[2] / m)
+
+
+def _structural_key(seg: LightSegment) -> tuple:
+    """Everything that, if changed, forces a hard segment boundary regardless
+    of how small the colour move is."""
+    return (seg.bars, seg.chase, seg.spots_warm, seg.strobe > 0.0)
+
+
+def _mergeable(a: LightSegment, b: LightSegment) -> bool:
+    """True if b is just micro-ripple on top of a — same structure, both lit
+    (or both dark), and colour barely moved."""
+    if _structural_key(a) != _structural_key(b):
+        return False
+    if (a.color is None) != (b.color is None):
+        return False
+    if a.color is None:  # both dark, same structure → same segment
+        return True
+    if abs(a.brightness - b.brightness) >= TAU_L:
+        return False
+    ca, cb = _chroma(a.color), _chroma(b.color)
+    dist = sum((x - y) ** 2 for x, y in zip(ca, cb)) ** 0.5
+    return dist < TAU_CHROMA
+
+
+def _merge(segs: list[LightSegment]) -> list[LightSegment]:
+    """Collapse runs of micro-ripple into single held segments. The first
+    segment of a run defines the held value (curves are stepped), so the kept
+    onset time is exact — strict timing on every surviving (real) jump."""
+    out: list[LightSegment] = []
+    for seg in segs:
+        if out and _mergeable(out[-1], seg):
+            out[-1].t1 = seg.t1  # extend the held segment over the ripple
+        else:
+            out.append(seg)
+    return out
+
+
 def _interpret(name: str, length: float, macros: dict[str, _Env]) -> list[LightSegment]:
+    bnds = _boundaries(macros, length)
     segs: list[LightSegment] = []
-    for t0, t1 in zip(_boundaries(macros, length), _boundaries(macros, length)[1:]):
+    for t0, t1 in zip(bnds, bnds[1:]):
         if t1 <= t0:
             continue
         r = macros["r"].sample(t0)
@@ -151,14 +205,16 @@ def _interpret(name: str, length: float, macros: dict[str, _Env]) -> list[LightS
             strobe=strobe if strobe > 0.0 else 0.0,
             spots_warm=vox > SPOT_ON,
         )
+        # Keep the wash colour whether or not barmode is raised — barmode adds
+        # a chase *on top of* the colour rather than replacing it.
+        if max(r, g, b) >= COLOR_ON:
+            seg.color = (r, g, b)
         if barmode > BARMODE_THRESHOLD:
             seg.chase = True
             # speed knob drives the chase if present, else fall back to barmode.
             seg.chase_intensity = barspeed if barspeed > 0.0 else barmode
-        elif max(r, g, b) >= COLOR_ON:
-            seg.color = (r, g, b)
         segs.append(seg)
-    return segs
+    return _merge(segs)
 
 
 def decode(root: ET.Element, *, track: ET.Element | None = None) -> list[ClipIR]:

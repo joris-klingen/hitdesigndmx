@@ -44,6 +44,23 @@ class LightSegment:
         return max(self.color) if self.color else 0.0
 
     @property
+    def saturation(self) -> float:
+        """0 = grey/white, 1 = a fully saturated hue. (max-min)/max."""
+        if not self.color:
+            return 0.0
+        hi = max(self.color)
+        if hi <= 1e-6:
+            return 0.0
+        return (hi - min(self.color)) / hi
+
+    @property
+    def is_washed_out(self) -> bool:
+        """True when there is no strong hue to be faithful to — near-white or
+        broadly full-RGB. Such segments are fair game for a self-coloured
+        Multicolor recipe, which would otherwise destroy a real hue."""
+        return bool(self.color) and self.brightness > 0.0 and self.saturation < 0.35
+
+    @property
     def lit(self) -> bool:
         """True if anything at all is happening in this segment."""
         return bool(self.color) or self.chase or self.strobe > 0.0 or self.spots_warm

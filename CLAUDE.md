@@ -26,32 +26,41 @@ CC-style channel VST).
 
 ## State (2026-06-13)
 
-Converter runs end-to-end (519/519 clips, ~8.5k notes) and the output loads
-in Live (track-ordering corruption fixed, see tests). **First real listen
-(2026-06-13): translation quality is poor** — converted clips don't yet
-resemble the legacy look. Expected culprits: the all-red color placeholder
-(item 1), the simplified segment interpretation in `sources/legacy_macro.py`
-vs the original heuristics (`reference/lightgen_legacy_convert.py`), and
-unverified velocity semantics (item 4). Improving fidelity is the next focus,
-in priority order:
+Converter runs end-to-end (519 clips → 513 written, 6 fully-dark clips emit
+nothing; ~9.8k notes) and the output loads in Live (track-ordering fixed).
+**Fidelity rewrite landed** — see [the design plan](../../../.claude/plans/agile-watching-dijkstra.md)
+for the verified hitnotedmx composition model it targets.
 
-1. **Color matching** — `vocab/hitnote_v1.py::pick_color_index` is a
-   placeholder returning red always. Implement nearest-neighbour over
-   `PRIMARY_PALETTE` (swap point is isolated; nothing else changes).
-2. **Golden tests** — `tests/test_convert.py` covers fixture totals
-   (519 clips / 8521 notes), track-before-returns ordering, sends==returns,
-   and idempotent re-runs. Still missing: per-clip note assertions (dark
-   clip → blackout note 0, strobe → note 48, pan-left → bar selectors 5+6).
-   Run with `uv run --with pytest --no-project -m pytest tests/ -q`.
-3. **Mapping-drift test** — parse `../hitnotedmx/mappings/v1.tsv` (skip test
-   if sibling repo absent) and assert vocab constants line up.
-4. **Velocity semantics** — encoder maps brightness → vel 64–127 for palette
-   notes (primary routing), `lo=1.0` for strobe/chase intensity. Verify
-   against actual hitnotedmx behaviour in Live (A/B converted track vs
-   legacy rack) before tuning.
+What the encoder/decoder now do:
+- **Colour matched, not red** — `pick_color_index` nearest-matches hue on
+  *normalised* RGB (dim red → Red, not Crimson); intensity rides palette-note
+  velocity. The set now uses 20+ palette colours.
+- **Strict timing** — decoder (`legacy_macro.py`) collapses micro-ripple by
+  significance (`TAU_L` / `TAU_CHROMA`) so every surviving boundary is a real
+  jump; encoder onsets a palette note exactly at each colour-segment start.
+- **Bold grid dynamics** — `_creative_layer` adds one deterministic recipe per
+  clip (chase for barmode, Breathe/Wild texture sized to the clip's pace, a
+  ~30% pixel-zone comb), held only over lit spans. **Multicolor recipes are
+  gated to washed-out clips** (they override hue).
+- `vox → Spot WW (1+3)`; no blackout note 0 mid-clip (darkness = no notes).
 
-If converted sets feel visually flat, mine
-`reference/lightgen_legacy_convert.py` for its effect-variety heuristics.
+Known tradeoff: palette-note velocity sets **both** intensity *and* fade
+duration, so a dim wash fades in over up to ~2 s. Onsets still land on the
+beat (attack timing is exact); only the rise-time of dim segments softens.
+Tune `VEL_FLOOR` if hardware shows this is too soft.
+
+Next, in priority order:
+1. **Eyeball on hardware** — confirm the colour spread, hit timing, and that
+   the bold dynamics read well; tune the curated recipe pools / `COMB_FRACTION`
+   / thresholds in `vocab/hitnote_v1.py` to taste.
+2. **Mapping-drift test** — parse `../hitnotedmx/mappings/v1.tsv` (skip if
+   sibling absent) and assert the vocab constants line up.
+3. **barmode-without-colour** currently renders a *white* chase (no wash colour
+   in the curve). Legacy convention was a red chase — consider injecting a dim
+   red for those segments if it reads better.
+
+`reference/lightgen_legacy_convert.py` still holds richer per-pixel pattern
+heuristics if the grid wants more variety later.
 
 ## Commands
 
