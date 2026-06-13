@@ -71,9 +71,15 @@ duration, so a dim wash fades in over up to ~2 s. Attack timing stays exact;
 only the rise-time of dim segments softens.
 
 Next, in priority order:
-1. **Eyeball on hardware** — confirm colour, hit timing, the fades, and that
-   the selector movement reads well; tune the knobs above to taste. If movement
-   feels too frantic raise `PULSE_BEATS`; too sparse, lower `ATTACK_MIN`.
+1. **Make the movement feel less random (user feedback 2026-06-13: "getting
+   closer, but still a bit random").** The spatial patterns travel but the
+   *choice* of pattern and its phase are seeded per clip with no musical
+   anchoring, so motion doesn't feel intentional. Ideas to try: align pattern
+   phase to the clip's bar/beat 1 (not absolute time); pick the pattern from
+   the clip's actual rhythm (e.g. pan direction → L/R sweep, build → climb)
+   rather than a name hash; reuse one coherent pattern across a song section;
+   coarser/steadier `_zone_band` motion. Tune the knobs below to taste.
+2. **Eyeball on hardware** — confirm colour, hit timing, the fades, movement.
 2. **Mapping-drift test** — parse `../hitnotedmx/mappings/v1.tsv` (skip if
    sibling absent) and assert the vocab constants line up.
 3. **barmode-without-colour** still renders a *white* chase; legacy convention
