@@ -70,20 +70,39 @@ Known tradeoff: palette-note velocity sets **both** intensity *and* fade
 duration, so a dim wash fades in over up to ~2 s. Attack timing stays exact;
 only the rise-time of dim segments softens.
 
-Next, in priority order:
-1. **Make the movement feel less random (user feedback 2026-06-13: "getting
-   closer, but still a bit random").** The spatial patterns travel but the
-   *choice* of pattern and its phase are seeded per clip with no musical
-   anchoring, so motion doesn't feel intentional. Ideas to try: align pattern
-   phase to the clip's bar/beat 1 (not absolute time); pick the pattern from
-   the clip's actual rhythm (e.g. pan direction → L/R sweep, build → climb)
-   rather than a name hash; reuse one coherent pattern across a song section;
-   coarser/steadier `_zone_band` motion. Tune the knobs below to taste.
-2. **Eyeball on hardware** — confirm colour, hit timing, the fades, movement.
-2. **Mapping-drift test** — parse `../hitnotedmx/mappings/v1.tsv` (skip if
-   sibling absent) and assert the vocab constants line up.
-3. **barmode-without-colour** still renders a *white* chase; legacy convention
-   was a red chase — consider injecting a dim red there if it reads better.
+## Roadmap (approved 2026-06-13) — toward a hitnotedmx clip designer
+
+Key reframe from the user: **the legacy rig had no spatial movement.** Rhythmic
+R/G/B pulsing was **beat-synced colour flashing** (bars pump the colour on the
+beat); `barmode` was the only "program" motion. Our travelling selector
+patterns *invented* motion → that's the "random" feel. Also: pan was an L↔R
+crossfade (left/right pair ok, refine later); coherence should be **per song /
+section**; ultimate goal is a designer built on a **shared library of named
+"looks."**
+
+Phases (do in order; each is shippable):
+1. **Beat-flash, not travel** — make rhythmic clips pump the matched colour on
+   the beat (the per-segment colour notes already encode this); stop defaulting
+   to travelling bar/zone patterns. Use `_attacks` for *energy*, not motion.
+   Keep `barmode → chase`, `vox → Spot WW`, pan left/right-pair.
+2. **Section coherence via scene names** — the Ableton **scenes** hold song/
+   section names (`als` needs a `scene_names(root)`; slot *i* ↔ scene *i*).
+   Carry `scene` into `ClipIR`; group into songs/sections; **seed character by
+   song, not per clip** so a song's clips share palette/energy. Section type
+   (verse/chorus/drop/tutti…) sets energy.
+3. **Looks library** (`hitdesigndmx/looks.py`) — refactor the encoder modes into
+   named, parameterised Looks (`warm_static`=App Warm, `colour_pump`,
+   `chase_program`, `breathe_wash`, `multicolour_wash`, structured
+   `traveling_region`). Converter becomes `classify(ir) → (look, params)`. This
+   is the shared vocabulary the designer (Phase 4) will author with.
+4. **Designer** (future) — high-level "section → Look + params" → MIDI over
+   `looks.py` + `als.add_note_track`.
+
+Reconciliation to settle on hardware: default to beat-flash; allow a structured
+`traveling_region` only on high-energy sections, phase-locked, one per section.
+
+Smaller follow-ups: mapping-drift test vs `../hitnotedmx/mappings/v1.tsv`;
+barmode-without-colour currently renders a *white* chase (legacy was red).
 
 `reference/lightgen_legacy_convert.py` still holds richer per-pixel pattern
 heuristics if the grid wants more variety later.
