@@ -70,6 +70,21 @@ def find_legacy_track(root: ET.Element) -> ET.Element:
     raise RuntimeError("no MidiTrack with an InstrumentGroupDevice (legacy rack) found")
 
 
+def scene_names(root: ET.Element) -> list[str]:
+    """Scene names in document order. Live aligns scene *i* with clip-slot *i*
+    across every track, so this is the song/section structure for a slot index
+    (empty string where a scene is unnamed). Stripped of surrounding whitespace
+    so ``'thema '`` and ``'thema'`` read as the same section."""
+    scenes = root.find("LiveSet/Scenes")
+    if scenes is None:
+        return []
+    out: list[str] = []
+    for sc in scenes.findall("Scene"):
+        n = sc.find("Name")
+        out.append(((n.get("Value") if n is not None else "") or "").strip())
+    return out
+
+
 def clip_slots(track: ET.Element) -> list[ET.Element]:
     return track.findall(".//ClipSlotList/ClipSlot")
 

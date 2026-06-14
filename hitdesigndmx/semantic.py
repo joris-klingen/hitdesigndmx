@@ -74,6 +74,14 @@ class ClipIR:
     slot: int
     length_beats: float
     segments: list[LightSegment] = field(default_factory=list)
+    # Song/section structure from the Ableton scenes (slot i ↔ scene i).
+    # ``scene`` is the raw scene name at this clip's slot (empty if unnamed);
+    # ``section`` is the *inherited* name — the nearest named scene at or before
+    # this slot — so a run of clips under one marker shares a section. An
+    # encoder seeds shared character (palette family / energy) by section, not
+    # per clip, so a song reads coherently. See ``sources/legacy_macro``.
+    scene: str = ""
+    section: str = ""
     # Deep copy of the source <MidiClip>, kept so the writer can reuse its
     # Loop / TimeSignature / CurrentStart-End (preserves the user's timing).
     source_clip: ET.Element | None = None

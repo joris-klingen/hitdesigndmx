@@ -39,7 +39,7 @@ def test_golden_counts(tmp_path):
     assert res.target == "hitnote_v1"
     assert res.clips_in == 519
     assert res.clips_written == 513      # 6 fully-dark clips emit nothing
-    assert 15000 <= res.notes_written <= 20000
+    assert 10000 <= res.notes_written <= 15000
 
 
 def test_track_inserted_before_returns(converted):
@@ -195,17 +195,71 @@ def test_all_notes_quantized_to_sixteenth(clips):
                 assert abs(t / grid - round(t / grid)) < 1e-4
 
 
-def test_movement_clips_drive_selectors(clips):
-    """Clips with active (oscillating) movement get a rhythmic selector pattern;
-    calm clips drift a zone band. Vertical-zone notes (12..20) are emitted *only*
-    by those two spatial modes — never by a chase/static/none clip — so they're
-    a clean marker that spatial movement is happening across the set."""
-    movers = [ir for ir in clips if V._clip_plan(ir).mode == "selectors"]
-    assert len(movers) > 50                            # a substantial share move
+def test_energetic_clips_beat_flash(clips):
+    """Phase 1: the legacy rig had no spatial movement. An energetic clip is
+    *beat-synced colour flashing* — the per-segment colour notes pump on the
+    beat under the pan bars (5..8) with no invented motion. So a ``flash`` clip
+    emits only spots/bars (1..8), the faithful strobe/wild, and palette colour;
+    never a vertical-zone/comb selector (12..23) nor a creative chase/breathe
+    (24..47) or multicolor (60..83) recipe."""
+    flashers = [ir for ir in clips if V._clip_plan(ir).mode == "flash"]
+    assert len(flashers) > 50                          # a substantial share pump
+    for ir in flashers:
+        for n in V.encode(ir):
+            p = n.pitch
+            assert not (12 <= p <= 23), "flash clip emitted a zone/comb"
+            assert not (V.CHASES_START <= p < V.WILD_START), "flash emitted chase/breathe"
+            assert not (V.COLOR_DYN_START <= p < V.PRIMARY_PALETTE_START), "flash emitted multicolor"
 
-    zone_clips = 0
+
+def test_no_invented_zone_motion(clips):
+    """No clip emits a travelling vertical-zone / pixel-comb selector (12..23)
+    anymore — that invented spatial movement was the 'random' feel we removed.
+    Bars come only from the pan (a left/right pair)."""
     for ir in clips:
-        if any(12 <= n.pitch <= 20 for n in V.encode(ir)):
-            zone_clips += 1
-            assert V._clip_plan(ir).mode in ("selectors", "calm")
-    assert zone_clips > 100                             # zones used widely now
+        assert all(not (12 <= n.pitch <= 23) for n in V.encode(ir))
+
+
+# ---- Phase 2: section coherence via scene names --------------------------
+def test_scenes_align_and_sections_inherit(clips):
+    """Scene names carry song/section structure (slot i ↔ scene i). Every clip
+    resolves to a section, and a clip under a *blank* scene inherits the nearest
+    named scene above it (the standard Ableton 'name marks a start' convention)."""
+    root = als.read_als(FIXTURE)
+    names = als.scene_names(root)
+    assert len(names) >= 500                              # one per scene/slot
+    # every decoded clip got a (non-empty) section, and many were inherited
+    assert all(ir.section for ir in clips)
+    inherited = [ir for ir in clips if not ir.scene and ir.section]
+    assert len(inherited) > 100                           # blanks inherit widely
+    # the raw scene, when present, is exactly the scene name at that slot
+    for ir in clips:
+        if ir.scene:
+            assert names[ir.slot] == ir.scene
+
+
+def test_section_drives_shared_character():
+    """Phase 2: a clip's creative character is seeded by its *section*, not its
+    own name — so two differently-named clips in the same song/section pick the
+    same recipe, while the same clip in another section may differ. This is the
+    coherence the per-clip seed used to break."""
+    from hitdesigndmx.semantic import ClipIR, LightSegment
+
+    def calm_clip(name: str, section: str) -> ClipIR:
+        # one steady, saturated span → calm (few attacks) + not washed-out, so
+        # it lands in the Breathe pool whose pick is seeded.
+        seg = LightSegment(t0=0.0, t1=4.0, color=(0.0, 0.6, 0.0))
+        return ClipIR(name=name, slot=0, length_beats=4.0, segments=[seg], section=section)
+
+    def recipe(ir: ClipIR) -> set[int]:
+        return {n.pitch for n in V.encode(ir) if V.BREATHES_START <= n.pitch < V.WILD_START}
+
+    a = recipe(calm_clip("alpha", "Whitney"))
+    b = recipe(calm_clip("beta", "Whitney"))
+    assert a and a == b                          # same section → identical recipe
+
+    # ...and it is the section, not the clip name, that drives the seed.
+    assert V._character_seed(calm_clip("alpha", "Whitney")) == V._seed("Whitney")
+    assert V._character_seed(calm_clip("x", "A")) != V._character_seed(calm_clip("x", "B"))
+    # with no section, it falls back to the clip name
+    assert V._character_seed(calm_clip("solo", "")) == V._seed("solo")

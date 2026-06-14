@@ -262,6 +262,9 @@ def decode(root: ET.Element, *, track: ET.Element | None = None) -> list[ClipIR]
             f"expected named macros {sorted(MACRO_ROLES)}"
         )
 
+    scenes = als.scene_names(root)
+    sections = _inherit_sections(scenes)  # slot → song/section it belongs to
+
     out: list[ClipIR] = []
     for slot_idx, slot in enumerate(als.clip_slots(src)):
         clip = als.slot_clip(slot)
@@ -278,9 +281,24 @@ def decode(root: ET.Element, *, track: ET.Element | None = None) -> list[ClipIR]
                 slot=slot_idx,
                 length_beats=length,
                 segments=_interpret(name, length, macros),
+                scene=scenes[slot_idx] if slot_idx < len(scenes) else "",
+                section=sections[slot_idx] if slot_idx < len(sections) else "",
                 source_clip=copy.deepcopy(clip),
             )
         )
+    return out
+
+
+def _inherit_sections(scene_names: list[str]) -> list[str]:
+    """Carry each named scene forward over the unnamed scenes beneath it, so
+    every slot resolves to the song/section marker it lives under (the standard
+    Ableton convention: a name marks a start, blank scenes belong to it)."""
+    out: list[str] = []
+    current = ""
+    for name in scene_names:
+        if name:
+            current = name
+        out.append(current)
     return out
 
 

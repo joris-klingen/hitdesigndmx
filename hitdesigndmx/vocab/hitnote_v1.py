@@ -104,64 +104,38 @@ MERGE_VEL_TOL = 6.0    # contiguous same-pitch holds merge if velocity within th
 WHITE_SAT = 0.18       # below this saturation a colour is treated as white
 
 # Curated recipe pools — kept deliberately *gentle* (Breathes / soft movers,
-# no Sparkles) so the grid reads calm; the spatial interest comes from moving
-# the lit region around, not from busy brightness effects. Picked per clip by
-# seed so re-runs are identical and each clip keeps its character.
+# no Sparkles) so the grid reads calm. They give a *calm* clip some life where
+# the music isn't pumping; an energetic clip needs none (its colour does the
+# work). Picked per clip by seed so re-runs are identical and each clip keeps
+# its character.
 CHASES = list(range(CHASES_START, CHASES_START + NUM_CHASES))      # 24..35
 SUSTAINED_TEXTURE = [36, 37, 46, 47, 44]   # Breathe, Sine, Shimmer, Sway, Drift
 MEDIUM_TEXTURE = [36, 37, 46, 47]          # Breathe, Sine, Shimmer, Sway
 MULTICOLOR_TEXTURE = [60, 69, 70, 72, 74, 79]  # Rainbow, Ocean, Forest, Sunset, Borealis, Plasma
 
-# Spatial movement. The lit region is kept *small and travelling* — a quarter
-# / band / quadrant that moves around the grid — rather than a static half, so
-# coverage varies and the rig never sits on the same pixels too long. Bar
-# selectors (5..8) and vertical-zone selectors (12..20 = zones 1..9) combine
-# (a region = bar subset ∩ zone band). Rhythmic clips step a pattern on the
-# beat; calm clips drift a wider zone band slowly under the pan bars.
+# Energy, not motion. The legacy rig had no spatial movement: a rhythmic clip
+# is *beat-synced colour flashing* — the bars pump the matched colour on the
+# beat. The decoder already segments each pulse, so the per-segment colour
+# notes encode that flashing directly. ``_attacks`` is therefore an *energy*
+# signal (how hard a clip pumps), used only to tell an energetic colour-pump
+# clip from a calm wash — never to invent travelling regions. Bars come from
+# the pan (a left/right pair); the only programmed motion is barmode → chase.
 ATTACK_DELTA = 0.20   # a brightness rise this big counts as a rhythmic attack
-ATTACK_MIN = 4        # clips with at least this many attacks move on the beat
-PULSE_BEATS = 1.0     # rhythmic pattern advances one step per this many beats
-CALM_PULSE_BEATS = 3.0  # calm zone-band drifts one step per this many beats
-_ZONE = lambda z: 12 + (z - 1)            # vertical zone 1..9 → pixel-zone note
-_BAR = BAR_SELECTOR                        # bar 1..4 → selector note 5..8
+ATTACK_MIN = 4        # clips with at least this many attacks read as energetic
 
-
-def _zone_band(center: int, width: int) -> list[int]:
-    """Notes for a band of ``width`` vertical zones centred on ``center`` (a
-    horizontal stripe across the bars), clamped to the 1..9 range."""
-    lo = center - width // 2
-    return [_ZONE(z) for z in range(lo, lo + width) if 1 <= z <= 9]
-
-
-# Rhythmic patterns (step → selector notes). Each lights a small region that
-# travels, and most combine a bar with a zone band so movement roams the grid.
-def _pat_bar_pingpong(k: int) -> list[int]:        # one bar sweeps L↔R (quarter)
-    return [_BAR[[1, 2, 3, 4, 3, 2][k % 6]]]
-
-
-def _pat_zone_pingpong(k: int) -> list[int]:       # a zone band sweeps up↕down
-    seq = [1, 2, 3, 4, 5, 6, 7, 8, 9, 8, 7, 6, 5, 4, 3, 2]
-    return _zone_band(seq[k % len(seq)], 3)
-
-
-def _pat_quadrant(k: int) -> list[int]:            # a quadrant rotates round the rig
-    bars, zc = [((1, 2), 3), ((3, 4), 3), ((3, 4), 7), ((1, 2), 7)][k % 4]
-    return [_BAR[b] for b in bars] + _zone_band(zc, 3)
-
-
-def _pat_diag_travel(k: int) -> list[int]:         # a small cell travels diagonally
-    return [_BAR[1 + k % 4]] + _zone_band(1 + (2 * k) % 9, 2)
-
-
-PATTERNS = [_pat_bar_pingpong, _pat_zone_pingpong, _pat_quadrant, _pat_diag_travel]
-
-
-def _drift_zone(k: int) -> list[int]:
-    """Calm spatial drift: a soft zone band that wanders low↕high slowly. Held
-    under the pan bars, it keeps the lit area partial and gently moving instead
-    of a static colour wash over the whole (or half the) rig."""
-    return _zone_band([2, 4, 6, 8, 6, 4][k % 6], 3)
-
+# Section coherence (Phase 2). Ableton scenes name the song/section a clip
+# lives under (carried into ``ClipIR.section``). We seed a clip's *shared*
+# character — which recipe / chase it picks — by that section, not by the clip
+# name, so a song's clips read coherently instead of each rolling independently.
+#
+# Section type → energy: a named section can hint how hard it should pump. This
+# is a *small, explicit* table you grow as your scene-naming convention settles
+# — deliberately empty for now (no guessing meaning from this set's names). Each
+# entry is ``substring (lowercased) → delta on the attack threshold``: negative
+# reads energetic sooner (pumps), positive stays calmer. Examples to enable once
+# the vocabulary is confirmed: {"drop": -2, "tutti": -2, "chorus": -1,
+# "intro": +2, "break": +2, "bass only": +2}.
+SECTION_ENERGY: dict[str, int] = {}
 
 MIN_NOTE_BEATS = 1.0 / 32.0  # drop sub-perceptual slivers (clip-edge artifacts)
 
@@ -233,22 +207,41 @@ def _bar_holds(bars: frozenset[int]) -> list[tuple[int, float]]:
 class _Plan:
     """How a clip's grid is brought to life.
 
-    ``mode`` selects the spatial treatment: ``static`` (one steady wash, named
-    cues), ``chase`` (barmode), ``selectors`` (rhythmic — a travelling pattern
-    on the beat, replacing the pan bars), ``calm`` (a slow zone-band drift under
-    the pan bars + a gentle held recipe), or ``none``.
+    ``mode`` selects the treatment: ``static`` (one steady wash, named cues),
+    ``chase`` (barmode program), ``flash`` (energetic — the per-segment colour
+    notes pump on the beat under the pan bars, no invented motion), ``wash``
+    (calm — pan bars + a gentle held recipe for life), or ``none``.
     """
 
     mode: str
     chase_note: int | None = None              # 'chase': held over barmode runs
-    pattern: object = None                     # step → selector notes (selectors/calm)
-    pulse: float = PULSE_BEATS                 # beats per pattern step
     span_notes: list[tuple[int, float]] = None  # held over lit spans (recipe / static wash)
 
 
 def _seed(name: str) -> int:
-    """Deterministic per-clip seed — same name → same character every run."""
+    """Deterministic seed — same name → same character every run."""
     return int(hashlib.sha1(name.encode("utf-8")).hexdigest(), 16)
+
+
+def _character_seed(ir: ClipIR) -> int:
+    """Seed the clip's shared creative character. Keyed on the *section* (the
+    song/section the clip lives under) so a song's clips pick a coherent recipe/
+    chase family; falls back to the clip name when there's no section."""
+    return _seed(ir.section or ir.name)
+
+
+def _attack_threshold(ir: ClipIR) -> int:
+    """How many attacks read as 'energetic' for this clip, biased by its
+    section's energy (``SECTION_ENERGY``). Clamped to at least 1."""
+    return max(1, ATTACK_MIN + _section_energy(ir.section))
+
+
+def _section_energy(section: str) -> int:
+    low = section.lower()
+    for key, delta in SECTION_ENERGY.items():
+        if key in low:
+            return delta
+    return 0
 
 
 def _pick(seq: list[int], seed: int, salt: int) -> int:
@@ -277,16 +270,16 @@ def _clip_plan(ir: ClipIR) -> _Plan:
     """Decide the clip's bold grid character from its shape — deterministically.
 
     Named cues win first (e.g. App Warm → a static warm wash). Then: barmode →
-    a chase; else genuine *movement* (oscillating brightness) → a bar/zone-
-    selector pattern stepped by the rhythm; else washed-out (no strong hue) → a
-    self-coloured Multicolor recipe; else a brightness-recipe texture sized to
-    the clip's pace (+ a ~30% pixel comb).
+    a chase; else an energetic clip (oscillating brightness) → ``flash``, where
+    the per-segment colour notes pump on the beat with no invented motion; else
+    a calm clip → ``wash``, a gentle held recipe for life (a self-coloured
+    Multicolor recipe when washed-out, else a brightness texture sized to pace).
     """
     if _is_app_warm(ir.name):
         # Calm applause moment: steady warm wash, no movement, no fade dynamics.
         return _Plan("static", span_notes=[(APP_WARM_NOTE, APP_WARM_VEL)])
 
-    seed = _seed(ir.name)
+    seed = _character_seed(ir)  # shared per section, so a song coheres
     if any(s.chase for s in ir.segments):
         return _Plan("chase", chase_note=_pick(CHASES, seed, 4))
 
@@ -294,26 +287,24 @@ def _clip_plan(ir: ClipIR) -> _Plan:
     if not lit:
         return _Plan("none")
 
-    if _attacks(ir) >= ATTACK_MIN:
-        return _Plan("selectors", pattern=PATTERNS[(seed >> 4) % len(PATTERNS)],
-                     pulse=PULSE_BEATS)
+    if _attacks(ir) >= _attack_threshold(ir):
+        # Energetic: let the matched colour pump on the beat under the pan bars.
+        return _Plan("flash")
 
-    # Calm clip: a gentle held recipe + a slow zone-band drift under the pan
-    # bars, so the lit area stays partial and wanders instead of a static wash.
+    # Calm clip: a gentle held recipe gives life where the music isn't pumping.
     if sum(1 for s in lit if s.is_washed_out) / len(lit) > 0.6:
         recipe = (_pick(MULTICOLOR_TEXTURE, seed, 4), DYN_VEL)
     else:
         avg_len = sum(s.t1 - s.t0 for s in lit) / len(lit)
         pool = SUSTAINED_TEXTURE if avg_len >= 2.0 else MEDIUM_TEXTURE
         recipe = (_pick(pool, seed, 4), BREATHE_VEL)
-    return _Plan("calm", pattern=_drift_zone, pulse=CALM_PULSE_BEATS, span_notes=[recipe])
+    return _Plan("wash", span_notes=[recipe])
 
 
 # ---- segment + span → hold intervals -------------------------------------
 def _segment_intervals(seg: LightSegment) -> list[tuple[int, float, float, float]]:
-    """Per-segment holds that don't depend on the clip's movement plan: strobe
-    and singer spots. Colour and bar/zone selection are emitted in ``encode``
-    (the selector pattern, when active, replaces the pan-based bars)."""
+    """Per-segment holds that don't depend on the clip's plan: strobe and
+    singer spots. Colour and the pan bars are emitted in ``encode``."""
     out: list[tuple[int, float, float, float]] = []
     if seg.strobe > 0.0:
         out.append((STROBE, seg.t0, seg.t1, _vel(seg.strobe, lo=1.0)))
@@ -371,13 +362,12 @@ def encode(ir: ClipIR) -> list[Note]:
     """Lower one clip's IR into hitnotedmx notes.
 
     A faithful, strictly-timed colour wash per segment composes with one bold
-    movement layer chosen by ``_clip_plan``: a barmode chase, a rhythm-stepped
-    bar/zone-selector pattern, or a held recipe. In selector mode the pattern
-    advances on a ``PULSE_BEATS`` grid (so movement stays musical regardless of
-    how finely the colour is segmented) and supplies the bars in place of the
-    pan restriction; otherwise the bars come from the pan. Everything is
-    coalesced so sustained intent is single long notes, and no blackout note 0
-    is emitted (darkness = absence of notes, leaving singer spots untouched).
+    layer chosen by ``_clip_plan``: a barmode chase, a beat-flashing colour
+    pump (the colour notes carry it; the decoder already split each pulse), or
+    a held recipe. Bars always come from the pan (a left/right pair); the only
+    programmed motion is the chase. Everything is coalesced so sustained intent
+    is single long notes, and no blackout note 0 is emitted (darkness = absence
+    of notes, leaving singer spots untouched).
     """
     plan = _clip_plan(ir)
     intervals: list[tuple[int, float, float, float]] = []
@@ -391,20 +381,9 @@ def encode(ir: ClipIR) -> list[Note]:
             # span note (emitted below), so skip the faithful colour here.
             continue
         intervals.append((_palette_note(seg.color), seg.t0, seg.t1, _vel(seg.brightness)))
-        step = int(seg.t0 / plan.pulse + 1e-6)  # which grid cell → pattern step
-        if plan.mode == "selectors":
-            # the travelling pattern *replaces* the pan bars.
-            for pitch in plan.pattern(step):
-                intervals.append((pitch, seg.t0, seg.t1, SELECTOR_VEL))
-        elif plan.mode == "calm":
-            # pan bars, narrowed by a slowly-drifting zone band.
-            for pitch, vel in _bar_holds(seg.bars):
-                intervals.append((pitch, seg.t0, seg.t1, vel))
-            for pitch in plan.pattern(step):
-                intervals.append((pitch, seg.t0, seg.t1, SELECTOR_VEL))
-        else:  # chase: pan bars under the chase
-            for pitch, vel in _bar_holds(seg.bars):
-                intervals.append((pitch, seg.t0, seg.t1, vel))
+        # Bars come from the pan in every active mode — no invented motion.
+        for pitch, vel in _bar_holds(seg.bars):
+            intervals.append((pitch, seg.t0, seg.t1, vel))
 
     if plan.span_notes:
         for a, b in _runs(ir.segments, lambda s: s.color is not None):
