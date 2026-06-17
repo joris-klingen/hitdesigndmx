@@ -7,10 +7,12 @@ module only knows about the container.
 
 The output strategy mirrors the proven "sidecar" trick: deep-copy the source
 track, re-allocate its element Ids from ``NextPointeeId`` to avoid collisions,
-strip its instrument devices (so it's a plain MIDI track you route to the
-hitnotedmx plugin), and replace each clip's automation envelopes with note
-data. ClipSlot Ids are kept as-is because Live aligns them with Scene Ids and
-shares those Ids across tracks by design.
+re-do its device chain, and replace each clip's automation envelopes with note
+data. The device chain is inherited from the target track being replaced when
+it has one — so a hitnotedmx plugin the user loaded onto ``dmx_note`` survives
+re-conversion — and otherwise stripped to a plain MIDI track. ClipSlot Ids are
+kept as-is because Live aligns them with Scene Ids and shares those Ids across
+tracks by design.
 """
 
 from __future__ import annotations
@@ -158,17 +160,46 @@ def _clear_envelopes(clip: ET.Element) -> None:
 
 
 def _strip_devices(track: ET.Element) -> None:
-    """Empty the track's device chain so it's a plain MIDI track (the user
-    routes its MIDI output to the hitnotedmx plugin track)."""
+    """Empty the track's device chain so it's a plain MIDI track (used when the
+    set carries no existing target track to inherit a plugin chain from)."""
     for devices in track.findall(".//DeviceChain/DeviceChain/Devices"):
         for d in list(devices):
             devices.remove(d)
 
 
-def _reassign_ids(track: ET.Element, alloc: Callable[[], int]) -> None:
+def _carry_devices(new_track: ET.Element, existing: ET.Element | None) -> tuple:
+    """Set up ``new_track``'s device chain. If ``existing`` (a prior track of
+    the same name) carries devices — typically the hitnotedmx plugin the user
+    loaded onto it — transplant that chain in place of the source track's
+    instrument rack and return the transplanted device elements (so their Ids
+    are preserved across :func:`_reassign_ids`). Otherwise strip to a plain MIDI
+    track and return ``()``."""
+    devices = new_track.find("DeviceChain/DeviceChain/Devices")
+    kept = existing.find("DeviceChain/DeviceChain/Devices") if existing is not None else None
+    if devices is None or kept is None or len(kept) == 0:
+        _strip_devices(new_track)
+        return ()
+    for child in list(devices):
+        devices.remove(child)
+    transplanted = []
+    for child in list(kept):
+        clone = copy.deepcopy(child)
+        devices.append(clone)
+        transplanted.append(clone)
+    return tuple(transplanted)
+
+
+def _reassign_ids(
+    track: ET.Element, alloc: Callable[[], int], keep_subtrees: tuple = ()
+) -> None:
     """Fresh Ids for every Id-bearing element EXCEPT the scene-aligned outer
-    ClipSlots (Live shares those Ids with Scenes / across tracks)."""
+    ClipSlots (Live shares those Ids with Scenes / across tracks) and anything
+    under ``keep_subtrees`` — a transplanted plugin chain whose original (now
+    freed, since its old track is removed) Ids must stay put so its internal
+    cross-references remain intact."""
     keep = {id(s) for s in track.findall(".//ClipSlotList/ClipSlot")}
+    for sub in keep_subtrees:
+        keep.update(id(el) for el in sub.iter())
     for el in track.iter():
         if el.get("Id") is not None and id(el) not in keep:
             el.set("Id", str(alloc()))
@@ -184,16 +215,28 @@ def add_note_track(
     ``target_name`` whose clips carry the given notes. Returns clips written.
 
     The clone keeps clip names/timing/loop/time-signature; we only swap each
-    populated clip's envelopes for notes and strip the instrument devices.
+    populated clip's envelopes for notes and re-do its device chain.
 
     Any existing MidiTrack already named ``target_name`` is replaced, so
     re-running the converter on a set is idempotent instead of accumulating
-    output tracks.
+    output tracks. If that existing track carries devices (e.g. the user has
+    loaded the hitnotedmx plugin onto it), its plugin chain is carried over to
+    the replacement so re-converting doesn't wipe the plugin.
     """
     alloc, commit = _id_allocator(root)
 
+    # Grab the track we're about to replace (if any) before it's removed, so we
+    # can inherit its device chain — the plugin the user set up on it.
+    existing = next(
+        (
+            t for t in tracks(root)
+            if t.tag == "MidiTrack" and (track_name(t) or "").strip() == target_name
+        ),
+        None,
+    )
+
     new_track = copy.deepcopy(source_track)
-    _strip_devices(new_track)
+    transplanted = _carry_devices(new_track, existing)
 
     # Rename (user-facing + effective + memorised first-clip name).
     name_el = new_track.find("Name")
@@ -220,7 +263,7 @@ def add_note_track(
         if notes:
             written += 1
 
-    _reassign_ids(new_track, alloc)
+    _reassign_ids(new_track, alloc, keep_subtrees=transplanted)
 
     tracks_el = root.find("LiveSet/Tracks")
     for t in list(tracks_el):

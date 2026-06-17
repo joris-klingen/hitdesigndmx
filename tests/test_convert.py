@@ -69,6 +69,29 @@ def test_rerun_replaces_existing_target(converted, tmp_path):
     assert len(named) == 1
 
 
+def test_existing_plugin_chain_is_preserved(converted, tmp_path):
+    """If the target track already carries devices (the user loaded the
+    hitnotedmx plugin onto dmx_note), re-converting keeps that device chain
+    rather than wiping it to a plain MIDI track. A first conversion has none
+    (plain MIDI), so we simulate the user adding the plugin, then re-convert."""
+    import xml.etree.ElementTree as ET
+
+    root = als.read_als(converted)
+    devs = als.find_track(root, name="dmx_note").find("DeviceChain/DeviceChain/Devices")
+    assert devs is not None and len(devs) == 0          # first run → plain MIDI track
+    ET.SubElement(devs, "PluginDevice", {"Id": "987654"})  # user loads the plugin
+    plugged = tmp_path / "plugged.als"
+    als.write_als(root, plugged)
+
+    out = tmp_path / "preserved.als"
+    convert(plugged, out)
+    root2 = als.read_als(out)
+    named = [t for t in als.tracks(root2) if (als.track_name(t) or "") == "dmx_note"]
+    assert len(named) == 1                              # still replaced, not doubled
+    kept = named[0].find("DeviceChain/DeviceChain/Devices")
+    assert [c.tag for c in kept] == ["PluginDevice"]    # plugin carried over
+
+
 # ---- fidelity invariants --------------------------------------------------
 def test_color_variety(clips):
     """Colour is matched, not forced to red: the set uses a wide palette."""
