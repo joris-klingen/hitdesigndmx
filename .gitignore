@@ -1,14 +1,32 @@
-__pycache__/
-*.pyc
-.venv/
-.pytest_cache/
-dist/
+# Build outputs
 build/
-*.egg-info/
-.DS_Store
 out/
+*.vst3
+*.dSYM
 
-# Local working sets (real conversion input/output, not fixtures)
+# JUCE / CMake noise
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+_deps/
+
+# IDE / editor
+.vscode/
+.idea/
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+
+# OS junk
+.DS_Store
+
+# Local working sets (real design input/output, not fixtures)
 legacy_input/
 legacy_output/
 Backup/

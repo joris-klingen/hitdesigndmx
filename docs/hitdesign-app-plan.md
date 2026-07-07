@@ -5,17 +5,24 @@ clips — drums, bass, synths — by drag and drop, plus user-chosen colors, a
 dynamics level and a brightness level, and designs a MIDI clip that triggers
 hitnotedmx. Length defaults to the drums clip's length, adjustable.*
 
-> **Status: IMPLEMENTED (2026-07-07).** All three milestones landed in the
-> **hitnotedmx** repo on branch `claude/pensive-allen-kc62l1` — `design/`
-> (GUI-free engine), `design/app/` (the JUCE `HitDesign` app with live rig
-> preview), `tools/HitDesignCli.cpp` (the `hitdesign` CLI), wired as two CMake
-> targets, guarded by the `design-selftest` CTest. Verified end-to-end:
-> real `.mid` in → design → `.mid` out → composed through the real `computeDmx`
-> (recipe-render filmstrips), and the GUI launches + lights the rig preview.
-> One design refinement vs. the plan below: layering is organised around
-> **bass-gated active regions** so a lit stretch always carries the chosen
-> colour (never bare white) and rests are truly dark. See the hitnotedmx
-> README "HitDesign" section.
+> **Status: IMPLEMENTED (2026-07-07), and HitDesign is now the core of THIS
+> repo.** All three milestones shipped — `design/` (GUI-free engine),
+> `design/app/` (the JUCE `HitDesign` app with live rig preview),
+> `tools/HitDesignCli.cpp` (the `hitdesign` CLI) — wired as two CMake targets and
+> guarded by the `design-selftest` CTest. The legacy Python `.als` converter was
+> removed; this repo now **depends on hitnotedmx via FetchContent** (pinned
+> commit) for its shared `Source/` (vocabulary / palette / compositor /
+> visualiser / driver), so there's still zero mapping drift and the plugin itself
+> isn't built here. Verified end-to-end: real `.mid` in → design → `.mid` out →
+> composed through the real `computeDmx` (recipe-render filmstrips), and the GUI
+> launches + lights the rig preview. One design refinement vs. the plan below:
+> layering is organised around **bass-gated active regions** so a lit stretch
+> always carries the chosen colour (never bare white) and rests are truly dark.
+>
+> NB: the plan text below discusses placing the app *inside the hitnotedmx repo*
+> — that was the original decision; the final home is this repo (hitdesigndmx),
+> consuming hitnotedmx as a dependency. The engine design and milestones are
+> otherwise as built.
 
 ## Where it lives, and why
 
