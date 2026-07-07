@@ -5,6 +5,18 @@ clips — drums, bass, synths — by drag and drop, plus user-chosen colors, a
 dynamics level and a brightness level, and designs a MIDI clip that triggers
 hitnotedmx. Length defaults to the drums clip's length, adjustable.*
 
+> **Status: IMPLEMENTED (2026-07-07).** All three milestones landed in the
+> **hitnotedmx** repo on branch `claude/pensive-allen-kc62l1` — `design/`
+> (GUI-free engine), `design/app/` (the JUCE `HitDesign` app with live rig
+> preview), `tools/HitDesignCli.cpp` (the `hitdesign` CLI), wired as two CMake
+> targets, guarded by the `design-selftest` CTest. Verified end-to-end:
+> real `.mid` in → design → `.mid` out → composed through the real `computeDmx`
+> (recipe-render filmstrips), and the GUI launches + lights the rig preview.
+> One design refinement vs. the plan below: layering is organised around
+> **bass-gated active regions** so a lit stretch always carries the chosen
+> colour (never bare white) and rests are truly dark. See the hitnotedmx
+> README "HitDesign" section.
+
 ## Where it lives, and why
 
 **C++ / JUCE, inside the hitnotedmx repo** — a new `design/` source directory
